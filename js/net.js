@@ -1,0 +1,619 @@
+// Онлайн: вход через аккаунт claude.ai, лобби открытых матчей, матч один на один по сети.
+// Хозяин матча считает игру и ~25 раз в секунду рассылает снимок состояния через presence комнаты;
+// гость шлёт свои нажатия (счётчиками, чтобы ни одно не потерялось и не задвоилось) и рисует снимки с интерполяцией.
+// Локально (?netmock) вместо комнаты платформы работает BroadcastChannel — можно сыграть в двух вкладках.
+// На своём сайте (GitHub Pages) вместо claude.ai — Firebase: вход через Google и комнаты в Realtime Database.
+WP.Net = (function () {
+  const ACT = ['windup', 'release', 'fake', 'block', 'steal', 'catch', 'celebrate', 'dive', 'drawfoul'];
+  const STY = ['over', 'side', 'flick', 'back'];
+  const STATES = ['intro', 'sprint', 'live', 'dead', 'goal', 'break', 'final', 'timeout', 'penalty'];
+  const CNT = ['pass', 'shootP', 'lob', 'skipP', 'fake', 'foul', 'play', 'sub', 'thru', 'lobpass', 'timeout', 'challenge'];
+  const HELD = ['passD', 'shootD', 'skipD', 'foulD', 'thruD', 'fakeD', 'sprintK', 'sprint'];
+  const r2 = (v) => Math.round(v * 100) / 100;
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+  let room = null, user = null, db = null, me = null, ready = null, mock = false, fb = null, needLogin = false;
+  let hooks = {}, game = null, lobbyUnsub = null, msg = '', stats = { w: 0, d: 0, l: 0, gf: 0, ga: 0 };
+  const pref = { team: localStorage.getItem('polo25_netTeam') || 'AS1', len: +(localStorage.getItem('polo25_netLen') || 4) };
+
+  // ---------- подключение к платформе ----------
+  function init() {
+    if (ready) return ready;
+    ready = (async () => {
+      if (/netmock/.test(location.search)) { room = mockRoom(); mock = true; }
+      else if (window.claude && typeof window.claude.use === 'function') {
+        const [r, u, d] = await Promise.all(['room', 'user', 'db'].map(n => window.claude.use(n).catch(() => null)));
+        room = r; user = u; db = d;
+      } else if (WP.FIREBASE && WP.FIREBASE.apiKey) {
+        try { fb = await fbInit(); } catch (e) { fb = null; msg = 'Не удалось подключить Firebase: ' + (e.message || e); }
+        if (fb && fb.auth.currentUser) fbSignedIn(); else if (fb) needLogin = true;
+      }
+      me = me || (user ? await user.me() : { id: null, name: mock ? mockName() : '', avatarUrl: '', color: '#58c6ff' });
+      await loadStats();
+      return !!room;
+    })();
+    return ready;
+  }
+  function mockName() {
+    let n = sessionStorage.getItem('wpNick');
+    if (!n) { n = 'Игрок ' + (10 + Math.floor(Math.random() * 89)); sessionStorage.setItem('wpNick', n); }
+    return n;
+  }
+
+  // ---------- Firebase: вход через Google и комнаты поверх Realtime Database ----------
+  const loadScript = (src) => new Promise((res, rej) => { const el = document.createElement('script'); el.src = src; el.onload = res; el.onerror = () => rej(new Error('не загрузился ' + src)); document.head.appendChild(el); });
+  async function fbInit() {
+    const B = 'https://www.gstatic.com/firebasejs/10.12.2/';
+    await loadScript(B + 'firebase-app-compat.js');
+    await loadScript(B + 'firebase-auth-compat.js');
+    await loadScript(B + 'firebase-database-compat.js');
+    const app = firebase.initializeApp(WP.FIREBASE);
+    const auth = app.auth();
+    try { await auth.getRedirectResult(); } catch (e) { /* вход через переадресацию не удался */ }
+    await new Promise(res => { const un = auth.onAuthStateChanged(() => { un(); res(); }); });
+    return { app, auth, db: app.database() };
+  }
+  function fbSignedIn() {
+    const u = fb.auth.currentUser;
+    me = { id: u.uid, name: u.displayName || 'Игрок', avatarUrl: u.photoURL || '', color: '#58c6ff' };
+    needLogin = false;
+    room = fbRoom();
+  }
+  async function login() {
+    if (!fb) return;
+    const prov = new firebase.auth.GoogleAuthProvider();
+    try { await fb.auth.signInWithPopup(prov); }
+    catch (e) {
+      if (e && /popup/.test(e.code || '')) { await fb.auth.signInWithRedirect(prov); return; }
+      msg = 'Вход не удался: ' + (e.message || e.code); render(); return;
+    }
+    fbSignedIn(); await loadStats(); lobbyUnsub = null; start(); render();
+  }
+  async function logout() { if (fb) { await fb.auth.signOut(); location.reload(); } }
+  // Комната: rooms/<имя>/peers/<вкладка> = { by, name, photo, p: присутствие }; узел сам удаляется при обрыве связи
+  function fbRoom() {
+    const fdb = fb.db, u = fb.auth.currentUser, self = Math.random().toString(36).slice(2, 12);
+    function api(name) {
+      const base = fdb.ref('rooms/' + name + '/peers'), mine = base.child(self);
+      let pres = {}, peersMap = new Map(), snap = null, handlers = [], pend = null, lastW = 0, alive = true;
+      const write = () => { pend = null; lastW = Date.now(); if (alive) mine.set({ by: u.uid, name: u.displayName || '', photo: u.photoURL || '', p: pres, t: firebase.database.ServerValue.TIMESTAMP }).catch(() => {}); };
+      // Вернулись в сеть (после WhatsApp и т.п.) — заново занимаем место в комнате
+      const conn = fdb.ref('.info/connected');
+      const onConn = conn.on('value', (s) => { if (s.val() === true && alive) { mine.onDisconnect().remove(); write(); } });
+      function build() {
+        if (snap) return snap;
+        const arr = [{ peer: self, by: u.uid, isMe: true, sameTab: true, kind: 'viewer', guest: false, presence: Object.freeze({ ...pres }), updatedAt: Date.now() }];
+        for (const [peer, v] of peersMap) arr.push({ peer, by: v.by, isMe: v.by === u.uid, sameTab: false, kind: 'viewer', guest: false, presence: v.presence, updatedAt: v.at });
+        return (snap = Object.freeze(arr));
+      }
+      const onVal = base.on('value', (s) => {
+        const val = s.val() || {}, prev = peersMap, joined = [], left = [];
+        peersMap = new Map();
+        for (const id in val) {
+          if (id === self) continue;
+          const v = val[id] || {}, key = JSON.stringify(v.p || {}), old = prev.get(id);
+          if (v.by && v.name) nameCache[v.by] = v.name;
+          peersMap.set(id, old && old.key === key ? old : { by: v.by || null, presence: Object.freeze(v.p || {}), key, at: Date.now() });
+          if (!old) joined.push(id);
+        }
+        for (const id of prev.keys()) if (!peersMap.has(id)) left.push(id);
+        snap = null;
+        const peers = build();
+        for (const h of handlers.slice()) h({ peers, joined: peers.filter(p => joined.includes(p.peer)), left: left.map(id => ({ peer: id })), updated: [] });
+      }, (err) => { msg = 'Нет доступа к комнате: ' + (err && err.message); });
+      return {
+        name,
+        presence(patch) {
+          for (const k in patch) { if (patch[k] === null) delete pres[k]; else pres[k] = patch[k]; }
+          snap = null;
+          if (Date.now() - lastW > 40) write(); else if (!pend) pend = setTimeout(write, 40);
+          return Promise.resolve();
+        },
+        peers: build,
+        onPeers(fn) { handlers.push(fn); setTimeout(() => fn({ peers: build(), joined: build(), left: [], updated: [] }), 0); return () => { handlers = handlers.filter(h => h !== fn); }; },
+        connected: () => true,
+        leave() { alive = false; base.off('value', onVal); conn.off('value', onConn); mine.onDisconnect().cancel(); handlers = []; return mine.remove().catch(() => {}); },
+      };
+    }
+    const lobby = api('lobby');
+    return { presence: lobby.presence, peers: lobby.peers, onPeers: lobby.onPeers, connected: lobby.connected, join: (n) => Promise.resolve(api(n)) };
+  }
+
+  // ---------- статистика онлайн-матчей: в базе (у каждого своя), иначе в браузере ----------
+  async function loadStats() {
+    try {
+      if (fb && me && me.id) { const s = await fb.db.ref('users/' + me.id + '/online').get(); if (s.exists()) Object.assign(stats, s.val()); return; }
+    } catch (e) { /* база недоступна */ }
+    try {
+      if (db && me && me.id) { const s = await db.doc('data/users/' + me.id + '/online').get(); if (s && s.exists) Object.assign(stats, s.data()); return; }
+    } catch (e) { /* база недоступна — берём из браузера */ }
+    try { Object.assign(stats, JSON.parse(localStorage.getItem('polo25_online') || '{}')); } catch (e) { /* пусто */ }
+  }
+  async function saveResult(my, opp) {
+    stats.gf += my; stats.ga += opp;
+    if (my > opp) stats.w++; else if (my < opp) stats.l++; else stats.d++;
+    try { localStorage.setItem('polo25_online', JSON.stringify(stats)); } catch (e) { /* нет хранилища */ }
+    try { if (db && me && me.id) await db.doc('data/users/' + me.id + '/online').set({ ...stats }); } catch (e) { /* остаётся в браузере */ }
+    try { if (fb && me && me.id) await fb.db.ref('users/' + me.id + '/online').set({ ...stats }); } catch (e) { /* остаётся в браузере */ }
+  }
+
+  // ---------- имена соперников: только через профили платформы, не из чужих данных ----------
+  const nameCache = {};
+  async function resolveNames(peers) {
+    const ids = peers.map(p => p.by).filter(Boolean);
+    if (user && ids.length) { try { const ps = await user.profiles(ids); for (const id of ids) nameCache[id] = (ps[id] && ps[id].name) || ''; } catch (e) { /* без имён */ } }
+  }
+  const peerName = (p) => (p.by && nameCache[p.by]) || (mock && p.presence && p.presence.nick) || 'Соперник';
+
+  // ---------- лобби ----------
+  function openGames() {
+    if (!room) return [];
+    return room.peers().filter(p => !p.sameTab && p.presence && p.presence.v === 1 && p.presence.host && !p.presence.busy);
+  }
+  const rndCode = () => Math.random().toString(36).slice(2, 6).replace(/[^a-z0-9]/g, 'x');
+  const teamDef = (code) => WP.TEAMS.find(t => t.code === code) || WP.TEAMS[0];
+
+  async function hostGame() {
+    await init(); if (!room) return;
+    const code = rndCode();
+    let gr;
+    try { gr = await room.join('wp-' + code); } catch (e) { msg = 'Не удалось создать комнату: ' + (e.code || e.message); render(); return; }
+    game = { role: 'host', code, room: gr, team: pref.team, len: pref.len, phase: 'wait', guestPeer: null, last: null, gc: 0, seq: 0, lastSnap: 0, bn: null, cd: null, tacKey: '' };
+    room.presence({ v: 1, host: code, team: pref.team, len: pref.len, busy: null, nick: mock ? me.name : null }).catch(() => {});
+    gr.presence({ v: 1, role: 'host', team: pref.team, len: pref.len, phase: 'wait' }).catch(() => {});
+    gr.onPeers(onGamePeers, onRoomError);
+    msg = ''; render();
+  }
+  async function onRoomError(e) {
+    if (!game || (e && e.code === 'not_permitted')) return;
+    const g = game;
+    setTimeout(async () => {
+      if (game !== g) return;
+      try {
+        g.room = await room.join('wp-' + g.code);
+        g.room.presence(g.role === 'host' ? { v: 1, role: 'host', team: g.team, len: g.len, phase: g.phase === 'play' ? 'play' : 'wait', away: g.away || null } : { v: 1, role: 'guest', team: g.team }).catch(() => {});
+        g.room.onPeers(onGamePeers, onRoomError);
+      } catch (er) { onRoomError(er); }
+    }, 1500);
+  }
+  async function joinGame(code) {
+    await init(); if (!room) return;
+    code = String(code || '').toLowerCase().trim().replace(/^wp-/, '');
+    if (!/^[a-z0-9]{3,8}$/.test(code)) { msg = 'Код — 4 латинские буквы или цифры'; render(); return; }
+    let gr;
+    try { gr = await room.join('wp-' + code); } catch (e) { msg = 'Не удалось войти: ' + (e.code || e.message); render(); return; }
+    game = { role: 'guest', code, room: gr, team: pref.team, phase: 'wait', buf: [], seq: -1, lastSend: 0, cnt: CNT.map(() => 0), gc: 0, g: {}, prevSt: null, bnId: 0, cdId: 0, scores: [0, 0] };
+    gr.presence({ v: 1, role: 'guest', team: pref.team, nick: mock ? me.name : null }).catch(() => {});
+    gr.onPeers(onGamePeers, onRoomError);
+    msg = ''; render();
+    // Не сдаёмся: хозяин мог свернуть игру на телефоне — когда вернётся, матч начнётся сам
+    const g = game;
+    const tick = () => {
+      if (game !== g || g.phase !== 'wait') return;
+      const inLobby = room.peers().some(p => !p.sameTab && p.presence && p.presence.host === code);
+      g.note = hostPeer() ? 'Хозяин найден — начинаем…' : inLobby ? 'Хозяин в сети, подключаемся к его матчу…'
+        : 'Хозяин матча ' + code.toUpperCase() + ' сейчас не в сети. Пусть откроет игру и держит её на экране (не сворачивает) — матч начнётся сам. Если код неверный, отмени и введи заново.';
+      render(); setTimeout(tick, 2000);
+    };
+    setTimeout(tick, 3000);
+  }
+  function hostPeer() { return game && game.room ? game.room.peers().find(p => !p.sameTab && p.presence && p.presence.role === 'host') : null; }
+
+  function onGamePeers(ch) {
+    if (!game) return;
+    if (game.role === 'host') {
+      const g = ch.peers.find(p => !p.sameTab && p.presence && p.presence.role === 'guest');
+      if (game.phase === 'wait' && g) startAsHost(g);
+      // Соперник свернул игру (WhatsApp и т.п.) — не сдаёмся сразу: пауза и ждём до 90 с
+      if (game.phase === 'play') {
+        if (!g && !game.awayAt) { game.awayAt = Date.now(); notice('Соперник свернул игру — пауза, ждём его до 90 с'); }
+        if (g && game.awayAt) { game.awayAt = 0; game.guestPeer = g.peer; game.last = null; notice('Соперник вернулся — играем!'); }
+        else if (g) game.guestPeer = g.peer;
+      }
+    } else {
+      const h = ch.peers.find(p => !p.sameTab && p.presence && p.presence.role === 'host');
+      if (h && game.phase === 'wait' && h.presence.phase === 'play' && h.presence.away) startAsGuest(h);
+      if (game.phase === 'play') {
+        if (!h && !game.awayAt) { game.awayAt = Date.now(); notice('Хозяин свернул игру — ждём его возвращения'); }
+        if (h && game.awayAt) { game.awayAt = 0; notice('Хозяин вернулся — играем!'); }
+      }
+    }
+  }
+  function startAsHost(g) {
+    let away = g.presence.team && WP.TEAMS.some(t => t.code === g.presence.team) ? g.presence.team : 'AS2';
+    if (away === game.team) away = (WP.TEAMS.find(t => t.code !== game.team && t.code !== 'KAZ') || WP.TEAMS[1]).code;
+    game.phase = 'play'; game.guestPeer = g.peer; game.away = away;
+    game.room.presence({ phase: 'play', away }).catch(() => {});
+    room.presence({ busy: true, inv: null, st: 'play' }).catch(() => {});
+    closeLobby();
+    hooks.start({ home: teamDef(game.team), away: teamDef(away), mode: '1p', humanSide: 0, periodMin: game.len, difficulty: 1, shootout: true, net: { role: 'host', code: game.code } });
+  }
+  function startAsGuest(h) {
+    game.phase = 'play';
+    room.presence({ st: 'play' }).catch(() => {});
+    closeLobby();
+    hooks.start({ home: teamDef(h.presence.team), away: teamDef(h.presence.away), mode: '1p', humanSide: 1, periodMin: h.presence.len || 4, difficulty: 1, shootout: true, net: { role: 'guest', code: game.code } });
+  }
+
+  function notice(text) { if (hooks.notice) hooks.notice(text); }
+  // Сколько ждём вернувшегося соперника и что показать на экране
+  const AWAY_HOST = 90, AWAY_GUEST = 120;
+  function status() {
+    if (!game || !game.awayAt || game.phase !== 'play') return null;
+    const left = (game.role === 'host' ? AWAY_HOST : AWAY_GUEST) - Math.floor((Date.now() - game.awayAt) / 1000);
+    return (game.role === 'host' ? 'Соперник вне игры — пауза · ' : 'Хозяин вне игры — ждём · ') + Math.max(0, left) + ' с';
+  }
+  // Хозяин: пока соперника нет, матч стоит; не вернулся вовремя — за него играет ИИ
+  function hostWaiting() {
+    if (!game || game.role !== 'host' || game.phase !== 'play' || !game.awayAt) return false;
+    if (Date.now() - game.awayAt > AWAY_HOST * 1000) { game.phase = 'solo'; game.awayAt = 0; if (hooks.left) hooks.left('Соперник не вернулся — за его команду играет ИИ'); return false; }
+    return true;
+  }
+  async function copyCode() {
+    if (!game) return;
+    try { await navigator.clipboard.writeText(game.code.toUpperCase()); msg = 'Код скопирован — отправь его другу'; }
+    catch (e) { msg = 'Не получилось скопировать — код: ' + game.code.toUpperCase(); }
+    render();
+  }
+
+  async function leave() {
+    const g = game; game = null;
+    if (room) room.presence({ host: null, busy: null, inv: null }).catch(() => {});
+    if (g && g.room) { try { await g.room.leave(); } catch (e) { /* уже вышли */ } }
+  }
+
+  // ---------- хозяин: ввод гостя → p2, снимок состояния → presence ----------
+  function attachHost(m) {
+    const em = m.emit;
+    m.emit = (k, d) => {
+      em(k, d);
+      if (!game) return;
+      if (k === 'banner') game.bn = [(game.bn ? game.bn[0] : 0) + 1, d.title || '', d.sub || '', d.tone || ''];
+      if (k === 'card' && d.player) game.cd = [(game.cd ? game.cd[0] : 0) + 1, d.kind, d.team === m.teams[0] ? 0 : 1, d.player.num, d.extra || '', d.reason || ''];
+      if (k === 'var' && d.phase === 'start') setTimeout(() => m.resolveChallenge(), 1500);
+      if (k === 'final') saveResult(m.teams[0].score, m.teams[1].score);
+    };
+  }
+  function hostInput(m) {
+    if (!game || game.role !== 'host' || game.phase !== 'play') return null;
+    const g = game.room.peers().find(p => p.peer === game.guestPeer);
+    const i = g && g.presence && g.presence.i;
+    if (!i || !Array.isArray(i.c)) return null;
+    const out = { x: +i.x || 0, z: +i.z || 0, mag: Math.min(1, +i.m || 0) };
+    HELD.forEach((k, b) => { out[k] = !!(i.h & (1 << b)); });
+    const last = game.last || i.c;
+    CNT.forEach((k, j) => { out[k] = i.c[j] !== last[j]; });
+    game.last = i.c.slice();
+    if (i.gc !== game.gc) { game.gc = i.gc; out.passGest = i.pg || null; out.shootGest = i.sg || null; out.thruUp = !!i.tu; }
+    else { out.passGest = null; out.shootGest = null; out.thruUp = false; }
+    // Тактика гостя приходит вместе с вводом
+    if (i.tac && typeof i.tac === 'object') {
+      const key = JSON.stringify(i.tac);
+      if (key !== game.tacKey && key.length < 300) { game.tacKey = key; const t = m.teams[1].tac; for (const f of ['att', 'pp', 'def', 'move']) if (typeof i.tac[f] === 'string') t[f] = i.tac[f]; m.teams[1].ai.dirty = true; }
+    }
+    return out;
+  }
+  function hostFrame(m) {
+    if (!game || game.role !== 'host' || game.phase !== 'play') return;
+    const now = performance.now();
+    if (now - game.lastSnap < 40) return;
+    game.lastSnap = now;
+    game.room.presence({ s: snapshot(m) }).catch(() => {});
+  }
+  function snapshot(m) {
+    const P = [];
+    m.teams.forEach((t, ti) => {
+      for (const p of t.players) {
+        const a = p.action, at = a ? ACT.indexOf(a.type) : -1;
+        const sty = a ? STY.indexOf((a.opts && a.opts.style) || a.style || '') : -1;
+        const f = (p.hasBall ? 1 : 0) | (p.excluded ? 2 : 0) | (p.hands ? 4 : 0) | (p.gkHandActive ? 8 : 0) | (p.outForGame ? 16 : 0) | (p.hardTime ? 32 : 0);
+        const row = [ti, p.num, r2(p.x), r2(p.z), r2(p.heading), r2(p.lift), r2(p.vx), r2(p.vz), at, at >= 0 ? r2(Math.min(a.t, 9)) : 0, at >= 0 ? r2(Math.min(a.dur, 9)) : 0, sty, f, p.excluded ? Math.ceil(p.exclTimer) : 0];
+        if (p.gkHandActive) row.push(r2(p.gkHand.x), r2(p.gkHand.y), r2(p.gkHand.z));
+        P.push(row);
+      }
+    });
+    const b = m.ball, h = b.holder;
+    const s = {
+      q: ++game.seq, t: r2(m.t), st: STATES.indexOf(m.state), cl: Math.round(m.clock * 10) / 10, sc: Math.round(m.shotClock * 10) / 10, pe: m.period,
+      sco: [m.teams[0].score, m.teams[1].score], po: m.possession ? m.teams.indexOf(m.possession) : -1,
+      b: [r2(b.pos.x), r2(b.pos.y), r2(b.pos.z), h ? m.teams.indexOf(h.team) : -1, h ? h.num : 0],
+      c1: m.controlled.p1 ? m.controlled.p1.num : 0, c2: m.controlled.p2 ? m.controlled.p2.num : 0,
+      to: [m.teams[0].timeouts, m.teams[1].timeouts], p: P,
+    };
+    if (game.bn) s.bn = game.bn;
+    if (game.cd) s.cd = game.cd;
+    if (m.so) s.sos = m.soScore();
+    if (game.seq % 25 === 0 || m.state === 'final' || m.state === 'break') s.ts = m.teams.map(t => [t.stats.shots, t.stats.onTarget, t.stats.saves, t.stats.exclEarned, t.stats.ppGoals, t.stats.ppAtt, t.stats.penGoals, t.stats.penEarned, t.stats.steals, t.stats.blocks]);
+    if (m.state === 'final' || m.state === 'break') s.ps = m.teams.map(t => t.roster.map(p => [p.num, p.stats.goals, p.stats.assists || 0, p.stats.shots, p.stats.saves, p.stats.steals, p.stats.excl, p.played ? 1 : 0]));
+    return s;
+  }
+
+  // ---------- гость: рисуем снимки хозяина, шлём свой ввод ----------
+  function attachGuest(m) {
+    // Гость ничего не считает сам: его матч — только картинка, которую заполняют снимки хозяина
+    m.teams[1].human = 'p1'; m.teams[0].human = null;
+    m.state = 'intro';
+  }
+  function guestFrame(m, inp) {
+    if (!game || game.role !== 'guest' || !game.room) return;
+    const h = hostPeer();
+    const s = h && h.presence && h.presence.s;
+    if (s && s.q !== game.seq) { game.seq = s.q; game.buf.push({ at: performance.now(), s }); if (game.buf.length > 10) game.buf.shift(); }
+    if (game.phase === 'play' && game.awayAt && Date.now() - game.awayAt > AWAY_GUEST * 1000) { game.phase = 'gone'; if (hooks.left) hooks.left('Хозяин матча так и не вернулся'); return; }
+    applyBuffered(m);
+    if (inp) collectInput(m, inp);
+  }
+  function collectInput(m, inp) {
+    CNT.forEach((k, j) => { if (inp[k]) game.cnt[j]++; });
+    if (inp.passGest || inp.shootGest || inp.thruUp) { game.gc++; game.g = { pg: inp.passGest || null, sg: inp.shootGest || null, tu: !!inp.thruUp }; }
+    const now = performance.now();
+    if (now - game.lastSend < 33) return;
+    game.lastSend = now;
+    let hb = 0; HELD.forEach((k, b) => { if (inp[k]) hb |= 1 << b; });
+    const t = m.teams[1].tac;
+    game.room.presence({ i: { x: r2(inp.x || 0), z: r2(inp.z || 0), m: r2(inp.mag || 0), h: hb, c: game.cnt.slice(), gc: game.gc, pg: game.g.pg || null, sg: game.g.sg || null, tu: !!game.g.tu, tac: { att: t.att, pp: t.pp, def: t.def, move: t.move } } }).catch(() => {});
+  }
+  // Рисуем с задержкой ~100 мс между двумя снимками — движение плавное даже при неровной сети
+  function applyBuffered(m) {
+    const buf = game.buf; if (!buf.length) return;
+    const rt = performance.now() - 100;
+    let a = buf[0], b = buf[buf.length - 1], k = 1;
+    for (let i = buf.length - 1; i > 0; i--) { if (buf[i - 1].at <= rt) { a = buf[i - 1]; b = buf[i]; k = Math.max(0, Math.min(1, (rt - a.at) / Math.max(1, b.at - a.at))); break; } }
+    applySnap(m, a.s, b.s, k);
+  }
+  const angLerp = (x, y, k) => x + WP.angNorm(y - x) * k;
+  function syncRosters(m, s) {
+    m.teams.forEach((t, ti) => {
+      const want = new Set(s.p.filter(r => r[0] === ti).map(r => r[1]));
+      for (const num of want) {
+        if (t.players.some(p => p.num === num)) continue;
+        const inn = t.bench.find(p => p.num === num); if (!inn) continue;
+        const out = t.players.find(p => !want.has(p.num));
+        if (out) m.swap(t, out, inn);
+      }
+    });
+  }
+  function applySnap(m, sa, sb, k) {
+    syncRosters(m, sb);
+    const rowsA = {}; for (const r of sa.p) rowsA[r[0] * 100 + r[1]] = r;
+    for (const r of sb.p) {
+      const t = m.teams[r[0]], p = t.players.find(q => q.num === r[1]); if (!p) continue;
+      const o = rowsA[r[0] * 100 + r[1]] || r;
+      p.x = o[2] + (r[2] - o[2]) * k; p.z = o[3] + (r[3] - o[3]) * k;
+      p.heading = angLerp(o[4], r[4], k); p.lift = o[5] + (r[5] - o[5]) * k;
+      p.vx = r[6]; p.vz = r[7];
+      const f = r[12];
+      p.hasBall = !!(f & 1); p.excluded = !!(f & 2); p.hands = !!(f & 4); p.gkHandActive = !!(f & 8); p.outForGame = !!(f & 16); p.hardTime = !!(f & 32); p.exclTimer = r[13];
+      if (r[8] >= 0) {
+        const type = ACT[r[8]], style = STY[r[11]] || 'over';
+        if (!p.action || p.action.type !== type) p.action = { type, t: r[9], dur: r[10] || 0.3, ai: true, opts: { style }, style };
+        else { p.action.t = r[9]; p.action.dur = r[10] || p.action.dur; }
+      } else p.action = null;
+      if (f & 8 && r.length >= 17) p.gkHand.set(r[14], r[15], r[16]);
+    }
+    // Мяч
+    const ball = m.ball, ba = sa.b, bb = sb.b;
+    const x = ba[0] + (bb[0] - ba[0]) * k, y = ba[1] + (bb[1] - ba[1]) * k, z = ba[2] + (bb[2] - ba[2]) * k;
+    ball.vel.set((x - ball.pos.x) * 60, (y - ball.pos.y) * 60, (z - ball.pos.z) * 60);
+    ball.pos.set(x, y, z);
+    if (bb[3] >= 0) { const hp = m.teams[bb[3]].players.find(q => q.num === bb[4]); ball.holder = hp || null; ball.state = hp ? 'held' : 'free'; }
+    else { ball.holder = null; ball.state = 'free'; }
+    // Табло, состояние, управляемые игроки
+    const st = STATES[sb.st] || 'live';
+    m.t = sb.t; m.clock = sb.cl; m.shotClock = sb.sc; m.period = sb.pe;
+    m.possession = sb.po >= 0 ? m.teams[sb.po] : null;
+    if (sb.to) { m.teams[0].timeouts = sb.to[0]; m.teams[1].timeouts = sb.to[1]; }
+    if (sb.sos) { m.so = m.so || { net: true }; m.soScore = () => sb.sos; } else m.so = null;
+    const mine = m.teams[1].players.find(q => q.num === sb.c2), theirs = m.teams[0].players.find(q => q.num === sb.c1);
+    for (const t of m.teams) for (const p of t.players) p.ctrl = null;
+    if (mine) mine.ctrl = 'p1';
+    if (theirs) theirs.ctrl = 'p2';
+    m.controlled.p1 = mine || null; m.controlled.p2 = theirs || null;
+    if (sb.ts) m.teams.forEach((t, i) => { const v = sb.ts[i]; Object.assign(t.stats, { shots: v[0], onTarget: v[1], saves: v[2], exclEarned: v[3], ppGoals: v[4], ppAtt: v[5], penGoals: v[6], penEarned: v[7], steals: v[8], blocks: v[9] }); });
+    if (sb.ps) m.teams.forEach((t, i) => { for (const row of sb.ps[i] || []) { const p = t.roster.find(q => q.num === row[0]); if (p) { Object.assign(p.stats, { goals: row[1], assists: row[2], shots: row[3], saves: row[4], steals: row[5], excl: row[6] }); p.played = !!row[7]; } } });
+    // События: голы, баннеры, карточки, перерывы, финал
+    if (sb.sco[0] !== game.scores[0] || sb.sco[1] !== game.scores[1]) { game.scores = sb.sco.slice(); m.teams[0].score = sb.sco[0]; m.teams[1].score = sb.sco[1]; WP.Audio.cheer(true); WP.Audio.net(); }
+    if (sb.bn && sb.bn[0] !== game.bnId) { game.bnId = sb.bn[0]; m.emit('banner', { title: sb.bn[1], sub: sb.bn[2], tone: sb.bn[3] }); WP.Audio.whistle('short'); }
+    if (sb.cd && sb.cd[0] !== game.cdId) {
+      game.cdId = sb.cd[0];
+      const t = m.teams[sb.cd[2]], p = t.roster.find(q => q.num === sb.cd[3]);
+      if (p) m.emit('card', { kind: sb.cd[1], player: p, team: t, extra: sb.cd[4], reason: sb.cd[5] });
+    }
+    if (st !== game.prevSt) {
+      if (st === 'break') { WP.Audio.horn(); m.state = st; m.emit('break', { period: m.period, shootout: false, net: true }); }
+      if (st === 'final' && game.prevSt !== null) { WP.Audio.horn(); m.state = st; m.emit('final', {}); saveResult(sb.sco[1], sb.sco[0]); }
+      game.prevSt = st;
+    }
+    m.state = st;
+  }
+
+  // ---------- лобби: интерфейс ----------
+  // Сразу после открытия игры: заявляем, что ты в игре, и слушаем лобби — кто в сети, кто зовёт на матч
+  let myStatus = 'menu', handledInv = {};
+  function start() {
+    init().then(() => {
+      if (!room || lobbyUnsub) return;
+      room.presence({ v: 1, st: myStatus, team: pref.team, len: pref.len }).catch(() => {});
+      lobbyUnsub = room.onPeers(async (ch) => { await resolveNames(ch.peers); onLobby(); });
+    });
+  }
+  function setStatus(st) { myStatus = st; if (room) room.presence({ v: 1, st }).catch(() => {}); badge(); }
+  const myPeer = () => { const p = room && room.peers().find(q => q.sameTab); return p ? p.peer : null; };
+  // Другие люди с открытой игрой (вкладка — один участник; твоё другое устройство тоже считается)
+  const othersOnline = () => (room ? room.peers().filter(p => !p.sameTab && p.presence && p.presence.v === 1) : []);
+  function badge() {
+    const b = $('btnOnline'); if (!b) return;
+    const n = othersOnline().length;
+    b.innerHTML = 'Онлайн' + (n ? ' <span class="on-badge">' + n + ' в сети</span>' : '');
+  }
+  function onLobby() {
+    badge();
+    const me1 = myPeer();
+    for (const p of othersOnline()) {
+      const pr = p.presence;
+      // Меня позвали на матч
+      if (pr.inv && pr.inv.to === me1 && pr.inv.code && !handledInv[pr.inv.code] && !(game && game.phase === 'play')) {
+        handledInv[pr.inv.code] = true; showInvite(p);
+      }
+      // Мой вызов отклонили
+      if (game && game.role === 'host' && game.phase === 'wait' && pr.decl && pr.decl.to === me1 && pr.decl.code === game.code) {
+        msg = peerName(p) + ' отказался от матча'; leave().then(render);
+      }
+    }
+    if (!$('online').hidden) render();
+  }
+  function showInvite(p) {
+    const T = teamDef(p.presence.inv.team || p.presence.team);
+    const box = $('netInvite');
+    box.innerHTML = '<div class="card"><h3>Вызов на матч</h3><p><b></b> зовёт сыграть онлайн: ' + WP.flag(T.code) + ' ' + esc(T.name) + ' · ' + (+p.presence.inv.len || 4) + ' мин</p><div class="row-btns"><button class="btn primary" data-inv="yes">Принять</button><button class="btn" data-inv="no">Отказаться</button></div></div>';
+    box.querySelector('b').textContent = peerName(p);
+    box.hidden = false;
+    WP.Audio.whistle('short');
+    box.onclick = (e) => {
+      const b = e.target.closest('[data-inv]'); if (!b) return;
+      box.hidden = true;
+      if (b.dataset.inv === 'yes') { if (hooks.beforeJoin) hooks.beforeJoin(); openLobby(); joinGame(p.presence.inv.code); }
+      else room.presence({ decl: { to: p.peer, code: p.presence.inv.code } }).catch(() => {});
+    };
+    clearTimeout(showInvite.t); showInvite.t = setTimeout(() => { box.hidden = true; }, 45000);
+  }
+  async function invite(peer) {
+    await init(); if (!room) return;
+    if (game) await leave();
+    await hostGame();
+    if (game && game.role === 'host') room.presence({ inv: { to: peer, code: game.code, team: game.team, len: game.len } }).catch(() => {});
+    msg = 'Вызов отправлен — ждём ответа'; render();
+  }
+  function openLobby() {
+    $('online').hidden = false;
+    msg = ''; render();
+    start();
+    init().then(render);
+  }
+  function closeLobby() { $('online').hidden = true; }
+  function render() {
+    const el = $('onBody'); if (!el) return;
+    const T = teamDef(pref.team);
+    let h = '';
+    if (!ready) h += '<p class="muted">Подключаемся…</p>';
+    // Аккаунт
+    if (ready && needLogin) {
+      h += '<div class="on-acc"><div><b>Войди, чтобы играть онлайн</b><small>Вход через Google: имя и фото возьмутся из аккаунта, статистика сохранится.</small></div></div><div class="row-btns"><button class="btn primary" data-net="login">Войти через Google</button></div>';
+      if (msg) h += '<p class="tac-msg">' + esc(msg) + '</p>';
+      el.innerHTML = h; return;
+    }
+    if (me && (me.name || me.id)) {
+      h += '<div class="on-acc">' + (me.avatarUrl ? '<img alt="" referrerpolicy="no-referrer" src="' + esc(me.avatarUrl) + '">' : '<span class="on-av" style="background:' + esc(me.color) + '"></span>') +
+        '<div><b>' + esc(me.name || 'Вы') + '</b><small>' + (fb ? 'Вход через Google' : 'Вход через аккаунт claude.ai') + ' · онлайн: ' + stats.w + ' побед, ' + stats.d + ' ничьих, ' + stats.l + ' поражений</small></div>' + (fb ? '<button class="btn small" data-net="logout">Выйти</button>' : '') + '</div>';
+    } else if (ready && window.claude && window.claude.use) {
+      h += '<div class="on-acc warn"><div><b>Вход не выполнен</b><small>Онлайн-матчи доступны тем, кто вошёл в claude.ai и кого владелец пригласил в игру по почте.</small></div></div>';
+    }
+    if (ready && !room) {
+      // Страница открыта внутри claude.ai, но комната не выдана — значит, зашли по публичной ссылке или без входа
+      const inClaude = !!(window.claude && window.claude.use);
+      if (!inClaude && !mock) { h += '<p class="tac-msg">' + esc(msg || 'Онлайн на этом сайте ещё настраивается (нужен проект Firebase).') + '</p>'; el.innerHTML = h; return; }
+      h += inClaude
+        ? '<div class="on-steps"><b>Ты открыл игру по публичной ссылке</b> — по ней claude.ai не пускает в онлайн-комнаты. Чтобы играть по сети:<ol><li>Владелец игры: «Поделиться» (Share) → добавить твою почту и дать доступ выше «Can view».</li><li>Ты: войди в claude.ai с этой почтой.</li><li>Открой игру заново по ссылке из приглашения — здесь появится твоё имя и список матчей.</li></ol><span class="muted small">Против ИИ, карьера и обучение работают и так.</span></div>'
+        : '<p class="tac-msg">Онлайн работает только в версии игры на claude.ai (не в локальном файле).</p>';
+      el.innerHTML = h; return;
+    }
+    // Кто сейчас в сети (помогает понять, видите ли вы друг друга)
+    if (room) {
+      const others = othersOnline();
+      const ST = { menu: 'в меню', wait: 'ждёт соперника', play: 'в матче', solo: 'играет один' };
+      h += '<div class="tac-sec"><div class="tac-lbl">Сейчас в сети · ' + (others.length + 1) + '</div>' + (others.length ? others.map(p => {
+        const pr = p.presence, free = !pr.busy && pr.st !== 'play' && !(game && game.phase === 'play');
+        return '<div class="on-game"><span class="on-dot"></span><span><b>' + esc(p.isMe ? 'Ты (другое устройство)' : peerName(p)) + '</b><small>' + (ST[pr.host ? 'wait' : pr.st] || 'в игре') + '</small></span>' +
+          (free ? '<button class="btn small primary" data-net="invite" data-v="' + esc(p.peer) + '">Позвать на матч</button>' : '') + '</div>';
+      }).join('') : '<p class="small muted">Пока никого. Попроси друга открыть игру — он появится здесь, и его можно будет позвать на матч без кодов.</p>') + '</div>';
+    }
+    // Ожидание соперника
+    if (game && game.role === 'host' && game.phase === 'wait') {
+      h += '<div class="on-wait"><small>Код матча</small><b>' + esc(game.code.toUpperCase()) + '</b><p>Ждём соперника. Код вводить не обязательно — друг увидит твой матч в списке «Открытые матчи». Если всё-таки уходишь в WhatsApp, матч не пропадёт: когда вернёшься, он начнётся.</p><div class="row-btns" style="justify-content:center"><button class="btn primary" data-net="copy">Скопировать код</button><button class="btn" data-net="cancel">Отменить матч</button></div></div>';
+    } else if (game && game.role === 'guest' && game.phase === 'wait') {
+      h += '<div class="on-wait"><small>Подключаемся к матчу</small><b>' + esc(game.code.toUpperCase()) + '</b><p>' + esc(game.note || 'Ищем хозяина матча…') + '</p><button class="btn" data-net="cancel">Отменить</button></div>';
+    } else {
+      h += '<div class="tac-sec"><div class="tac-lbl">Твоя команда</div><div class="on-team"><button class="btn small" data-net="prev">‹</button><span>' + WP.flag(T.code) + ' <b>' + esc(T.name) + '</b></span><button class="btn small" data-net="next">›</button></div></div>' +
+        '<div class="tac-sec"><div class="tac-lbl">Длина периода</div><div class="seg">' + [2, 4, 8].map(n => '<button data-net="len" data-v="' + n + '" aria-pressed="' + (pref.len === n) + '">' + n + ' мин</button>').join('') + '</div></div>' +
+        '<div class="row-btns"><button class="btn primary" data-net="host">Создать матч</button></div>' +
+        '<div class="tac-sec"><div class="tac-lbl">Войти по коду</div><div class="on-code"><input id="onCode" maxlength="8" placeholder="например k3v6" autocomplete="off"><button class="btn" data-net="join">Войти</button></div></div>';
+      const games = openGames();
+      h += '<div class="tac-sec"><div class="tac-lbl">Открытые матчи</div>' + (games.length ? games.map(p => { const gt = teamDef(p.presence.team); return '<div class="on-game">' + WP.flag(gt.code) + '<span><b>' + esc(peerName(p)) + '</b><small>' + esc(gt.name) + ' · ' + (+p.presence.len || 4) + ' мин · код ' + esc(String(p.presence.host).toUpperCase()) + '</small></span><button class="btn small primary" data-net="play" data-v="' + esc(p.presence.host) + '">Играть</button></div>'; }).join('') : '<p class="small muted">Пока никто не ждёт соперника — создай матч сам.</p>') + '</div>';
+    }
+    if (msg) h += '<p class="tac-msg">' + esc(msg) + '</p>';
+    el.innerHTML = h;
+  }
+  function bindUi() {
+    $('onClose').addEventListener('click', () => closeLobby());
+    // Вернулись на вкладку (после WhatsApp и т.п.) — заново заявляем о себе в лобби и в комнате
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden || !room || !game) return;
+      if (game.role === 'host' && game.phase === 'wait') { room.presence({ v: 1, host: game.code, team: game.team, len: game.len, busy: null }).catch(() => {}); game.room.presence({ v: 1, role: 'host', team: game.team, len: game.len, phase: 'wait' }).catch(() => {}); }
+      if (game.role === 'guest' && game.phase === 'wait') game.room.presence({ v: 1, role: 'guest', team: game.team }).catch(() => {});
+      if (game.phase === 'play') game.room.presence(game.role === 'host' ? { v: 1, role: 'host', team: game.team, len: game.len, phase: 'play', away: game.away } : { v: 1, role: 'guest', team: game.team }).catch(() => {});
+    });
+    $('onBody').addEventListener('click', (e) => {
+      const b = e.target.closest('[data-net]'); if (!b) return;
+      const a = b.dataset.net;
+      if (a === 'prev' || a === 'next') {
+        const n = WP.TEAMS.length, i = WP.TEAMS.findIndex(t => t.code === pref.team);
+        pref.team = WP.TEAMS[(i + (a === 'next' ? 1 : -1) + n) % n].code; localStorage.setItem('polo25_netTeam', pref.team); render();
+      }
+      if (a === 'len') { pref.len = +b.dataset.v; localStorage.setItem('polo25_netLen', pref.len); render(); }
+      if (a === 'host') hostGame();
+      if (a === 'copy') copyCode();
+      if (a === 'login') login();
+      if (a === 'logout') logout();
+      if (a === 'invite') invite(b.dataset.v);
+      if (a === 'cancel') { leave().then(render); }
+      if (a === 'join') joinGame(($('onCode') || {}).value);
+      if (a === 'play') joinGame(b.dataset.v);
+    });
+  }
+
+  // ---------- локальная подмена комнаты для проверки в двух вкладках ----------
+  function mockRoom() {
+    const ch = new BroadcastChannel('wp-netmock');
+    const self = Math.random().toString(36).slice(2, 10);
+    const rooms = {};
+    const R0 = (name) => rooms[name] || (rooms[name] = { name, peers: new Map(), mine: {}, handlers: [], snap: null, joined: false });
+    function snap(R) {
+      if (R.snap) return R.snap;
+      const arr = [{ peer: self, by: null, isMe: true, sameTab: true, kind: 'viewer', guest: false, presence: Object.freeze({ ...R.mine }), updatedAt: Date.now() }];
+      for (const [peer, v] of R.peers) arr.push({ peer, by: null, isMe: false, sameTab: false, kind: 'viewer', guest: false, presence: v.presence, updatedAt: v.at });
+      return (R.snap = Object.freeze(arr));
+    }
+    function notify(R, joined, left) { R.snap = null; const peers = snap(R); for (const h of R.handlers.slice()) h({ peers, joined, left, updated: [] }); }
+    const send = (R) => ch.postMessage({ t: 'p', room: R.name, peer: self, presence: R.mine });
+    ch.onmessage = (e) => {
+      const d = e.data, R = rooms[d.room]; if (!R || !R.joined) return;
+      if (d.t === 'p') { const had = R.peers.has(d.peer); R.peers.set(d.peer, { presence: Object.freeze(d.presence), at: Date.now() }); R.snap = null; notify(R, had ? [] : snap(R).filter(p => p.peer === d.peer), []); }
+      else if (d.t === 'hello') send(R);
+      else if (d.t === 'bye' && R.peers.delete(d.peer)) notify(R, [], [{ peer: d.peer }]);
+    };
+    setInterval(() => { const now = Date.now(); for (const n in rooms) { const R = rooms[n]; if (!R.joined) continue; send(R); for (const [p, v] of R.peers) if (now - v.at > 4000) { R.peers.delete(p); notify(R, [], [{ peer: p }]); } } }, 1000);
+    window.addEventListener('beforeunload', () => { for (const n in rooms) if (rooms[n].joined) ch.postMessage({ t: 'bye', room: n, peer: self }); });
+    function api(name) {
+      const R = R0(name); R.joined = true; ch.postMessage({ t: 'hello', room: name, peer: self });
+      let pend = false;
+      return {
+        name,
+        presence(patch) { for (const k in patch) { if (patch[k] === null) delete R.mine[k]; else R.mine[k] = patch[k]; } R.snap = null; if (!pend) { pend = true; setTimeout(() => { pend = false; send(R); }, 33); } return Promise.resolve(); },
+        peers() { return snap(R); },
+        onPeers(fn) { R.handlers.push(fn); setTimeout(() => fn({ peers: snap(R), joined: snap(R), left: [], updated: [] }), 0); return () => { R.handlers = R.handlers.filter(h => h !== fn); }; },
+        connected() { return true; },
+        leave() { R.joined = false; ch.postMessage({ t: 'bye', room: name, peer: self }); R.peers.clear(); R.handlers = []; R.mine = {}; R.snap = null; return Promise.resolve(); },
+      };
+    }
+    const lobby = api('lobby');
+    return { presence: lobby.presence, peers: lobby.peers, onPeers: lobby.onPeers, connected: lobby.connected, join: (n) => Promise.resolve(api(n)) };
+  }
+
+  return {
+    init, openLobby, closeLobby, bindUi, leave, attachHost, attachGuest, hostInput, hostFrame, guestFrame, status, hostWaiting, start, setStatus,
+    setHooks(h) { hooks = h; },
+    get role() { return game ? game.role : null; },
+    get phase() { return game ? game.phase : null; },
+  };
+})();
