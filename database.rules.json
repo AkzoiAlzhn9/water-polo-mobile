@@ -1,0 +1,20 @@
+{
+  "rules": {
+    "rooms": {
+      "$room": {
+        "peers": {
+          ".read": "auth != null",
+          "$peer": {
+            ".write": "auth != null && (!data.exists() || data.child('by').val() === auth.uid) && (!newData.exists() || newData.child('by').val() === auth.uid)"
+          }
+        }
+      }
+    },
+    "users": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        ".write": "auth != null && auth.uid === $uid"
+      }
+    }
+  }
+}
