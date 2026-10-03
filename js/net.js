@@ -52,6 +52,11 @@ WP.Net = (function () {
     const auth = app.auth();
     try { await auth.getRedirectResult(); } catch (e) { /* вход через переадресацию не удался */ }
     await new Promise(res => { const un = auth.onAuthStateChanged(() => { un(); res(); }); });
+    // Вернулись после переадресации, но браузер не отдал вход (бывает во встроенных браузерах мессенджеров)
+    if (sessionStorage.getItem('wpRedir')) {
+      sessionStorage.removeItem('wpRedir');
+      if (!auth.currentUser) msg = 'Вход не завершился. Разреши всплывающие окна для этого сайта или открой ссылку в Chrome / Safari и нажми «Войти» ещё раз.';
+    }
     return { app, auth, db: app.database() };
   }
   function fbSignedIn() {
@@ -65,8 +70,12 @@ WP.Net = (function () {
     const prov = new firebase.auth.GoogleAuthProvider();
     try { await fb.auth.signInWithPopup(prov); }
     catch (e) {
-      if (e && /popup/.test(e.code || '')) { await fb.auth.signInWithRedirect(prov); return; }
-      msg = 'Вход не удался: ' + (e.message || e.code); render(); return;
+      const c = (e && e.code) || '';
+      if (c === 'auth/popup-closed-by-user' || c === 'auth/cancelled-popup-request') return;
+      if (c === 'auth/popup-blocked' || c === 'auth/operation-not-supported-in-this-environment') {
+        sessionStorage.setItem('wpRedir', '1'); await fb.auth.signInWithRedirect(prov); return;
+      }
+      msg = 'Вход не удался: ' + (e.message || c); render(); return;
     }
     fbSignedIn(); await loadStats(); lobbyUnsub = null; start(); render();
   }
