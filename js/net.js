@@ -81,6 +81,20 @@ WP.Net = (function () {
     }
     fbSignedIn(); await loadStats(); lobbyUnsub = null; start(); render();
   }
+  // Без Google: анонимный вход Firebase с именем «Гость NN» (нужно включить в консоли Firebase: Authentication → Anonymous)
+  async function loginAnon() {
+    if (!fb) return;
+    try {
+      await fb.auth.signInAnonymously();
+      const u = fb.auth.currentUser;
+      if (u && !u.displayName) await u.updateProfile({ displayName: 'Гость ' + (10 + Math.floor(Math.random() * 90)) }).catch(() => {});
+    } catch (e) {
+      const c = (e && e.code) || '';
+      msg = /operation-not-allowed|admin-restricted/.test(c) ? 'Вход без Google пока выключен — войди через Google' : 'Не получилось войти: ' + (e.message || c);
+      render(); return;
+    }
+    fbSignedIn(); await loadStats(); lobbyUnsub = null; start(); render();
+  }
   async function logout() { if (fb) { await fb.auth.signOut(); location.reload(); } }
   // Комната: rooms/<имя>/peers/<вкладка> = { by, name, photo, p: присутствие }; узел сам удаляется при обрыве связи
   function fbRoom() {
@@ -165,13 +179,14 @@ WP.Net = (function () {
   const rndCode = () => Math.random().toString(36).slice(2, 6).replace(/[^a-z0-9]/g, 'x');
   const teamDef = (code) => WP.TEAMS.find(t => t.code === code) || WP.TEAMS[0];
 
-  async function hostGame() {
+  async function hostGame(quick) {
     await init(); if (!room) return;
     const code = rndCode();
     let gr;
     try { gr = await room.join('wp-' + code); } catch (e) { msg = 'Не удалось создать комнату: ' + (e.code || e.message); render(); return; }
     game = { role: 'host', code, room: gr, team: pref.team, len: pref.len, phase: 'wait', guestPeer: null, last: null, gc: 0, seq: 0, lastSnap: 0, bn: null, cd: null, tacKey: '', cur: null, inN: -1, ia: 0, sent: {}, rtt: 0 };
-    room.presence({ v: 1, host: code, team: pref.team, len: pref.len, busy: null, nick: mock ? me.name : null }).catch(() => {});
+    // Матч быстрого поиска не показываем в «Открытых матчах» — он уже обещан найденному сопернику
+    room.presence({ v: 1, host: code, team: pref.team, len: pref.len, busy: quick ? true : null, nick: mock ? me.name : null }).catch(() => {});
     gr.presence({ v: 1, role: 'host', team: pref.team, len: pref.len, phase: 'wait' }).catch(() => {});
     gr.onPeers(onGamePeers, onRoomError);
     msg = ''; render();
@@ -188,13 +203,14 @@ WP.Net = (function () {
       } catch (er) { onRoomError(er); }
     }, 1500);
   }
-  async function joinGame(code) {
+  async function joinGame(code, autoT) {
     await init(); if (!room) return;
     code = String(code || '').toLowerCase().trim().replace(/^wp-/, '');
     if (!/^[a-z0-9]{3,8}$/.test(code)) { msg = 'Код — 4 латинские буквы или цифры'; render(); return; }
     let gr;
     try { gr = await room.join('wp-' + code); } catch (e) { msg = 'Не удалось войти: ' + (e.code || e.message); render(); return; }
     game = { role: 'guest', code, room: gr, team: pref.team, phase: 'wait', buf: [], seq: -1, lastSend: 0, cnt: CNT.map(() => 0), gc: 0, g: {}, prevSt: null, bnId: 0, cdId: 0, scores: [0, 0], n: 0, sentAt: {}, hist: [], pr: null, off: { x: 0, z: 0 }, rtt: 0 };
+    if (autoT) { game.auto = Date.now(); game.autoT = autoT; }
     gr.presence({ v: 1, role: 'guest', team: pref.team, nick: mock ? me.name : null }).catch(() => {});
     gr.onPeers(onGamePeers, onRoomError);
     msg = ''; render();
@@ -202,6 +218,8 @@ WP.Net = (function () {
     const g = game;
     const tick = () => {
       if (game !== g || g.phase !== 'wait') return;
+      // Быстрый матч: найденный хозяин так и не начал — ищем дальше
+      if (g.auto && Date.now() - g.auto > 12000) { leave().then(() => quickStart(g.autoT)); return; }
       const inLobby = room.peers().some(p => !p.sameTab && p.presence && p.presence.host === code);
       g.note = hostPeer() ? 'Хозяин найден — начинаем…' : inLobby ? 'Хозяин в сети, подключаемся к его матчу…'
         : 'Хозяин матча ' + code.toUpperCase() + ' сейчас не в сети. Пусть откроет игру и держит её на экране (не сворачивает) — матч начнётся сам. Если код неверный, отмени и введи заново.';
@@ -219,14 +237,23 @@ WP.Net = (function () {
       // Соперник свернул игру (WhatsApp и т.п.) — не сдаёмся сразу: пауза и ждём до 90 с
       if (game.phase === 'play') {
         if (!g && !game.awayAt && !dcAlive()) { game.awayAt = Date.now(); notice('Соперник свернул игру — пауза, ждём его до 90 с'); }
-        if (g && game.awayAt) { game.awayAt = 0; game.guestPeer = g.peer; game.last = null; game.cur = null; game.inN = -1; notice('Соперник вернулся — играем!'); if (!dcOpen()) rtcOffer(); }
+        if (g && game.awayAt) { game.awayAt = 0; game.guestPeer = g.peer; game.last = null; game.cur = null; game.inN = -1; game.room.presence({ gp: g.peer }).catch(() => {}); notice('Соперник вернулся — играем!'); if (!dcOpen()) rtcOffer(); }
         else if (g) game.guestPeer = g.peer;
         const r = g && g.presence.rtc;
         if (r && r.a && r.id === game.rtcId && game.pc && !game.rtcSet) { game.rtcSet = true; game.pc.setRemoteDescription({ type: 'answer', sdp: r.a }).catch(() => {}); }
       }
     } else {
       const h = ch.peers.find(p => !p.sameTab && p.presence && p.presence.role === 'host');
-      if (h && game.phase === 'wait' && h.presence.phase === 'play' && h.presence.away) startAsGuest(h);
+      if (h && game.phase === 'wait' && h.presence.phase === 'play' && h.presence.away) {
+        const mine = game.room.peers().find(p => p.sameTab);
+        if (h.presence.gp && mine && h.presence.gp !== mine.peer) {
+          // Матч уже начался с другим соперником
+          const g = game;
+          if (g.auto) leave().then(() => quickStart(g.autoT)); else { msg = 'Этот матч уже начался с другим соперником'; leave().then(render); }
+          return;
+        }
+        startAsGuest(h);
+      }
       const r = h && h.presence.rtc;
       if (r && r.o && r.id !== game.rtcId) rtcAnswer(game, r);
       if (game.phase === 'play') {
@@ -239,7 +266,8 @@ WP.Net = (function () {
     let away = g.presence.team && WP.TEAMS.some(t => t.code === g.presence.team) ? g.presence.team : 'AS2';
     if (away === game.team) away = (WP.TEAMS.find(t => t.code !== game.team && t.code !== 'KAZ') || WP.TEAMS[1]).code;
     game.phase = 'play'; game.guestPeer = g.peer; game.away = away;
-    game.room.presence({ phase: 'play', away }).catch(() => {});
+    game.room.presence({ phase: 'play', away, gp: g.peer }).catch(() => {});
+    if (search) quickStop(true);
     room.presence({ busy: true, inv: null, st: 'play' }).catch(() => {});
     closeLobby();
     hooks.start({ home: teamDef(game.team), away: teamDef(away), mode: '1p', humanSide: 0, periodMin: game.len, difficulty: 1, shootout: true, net: { role: 'host', code: game.code } });
@@ -600,14 +628,14 @@ WP.Net = (function () {
       lobbyUnsub = room.onPeers(async (ch) => { await resolveNames(ch.peers); onLobby(); });
     });
   }
-  function setStatus(st) { myStatus = st; if (room) room.presence({ v: 1, st }).catch(() => {}); badge(); }
+  function setStatus(st) { myStatus = st; if (st === 'solo') quickStop(true); if (room) room.presence({ v: 1, st }).catch(() => {}); badge(); }
   const myPeer = () => { const p = room && room.peers().find(q => q.sameTab); return p ? p.peer : null; };
   // Другие люди с открытой игрой (вкладка — один участник; твоё другое устройство тоже считается)
   const othersOnline = () => (room ? room.peers().filter(p => !p.sameTab && p.presence && p.presence.v === 1) : []);
   function badge() {
     const b = $('btnOnline'); if (!b) return;
     const n = othersOnline().length;
-    b.innerHTML = 'Онлайн' + (n ? ' <span class="on-badge">' + n + ' в сети</span>' : '');
+    b.innerHTML = 'Онлайн' + (search ? ' <span class="on-badge">ищем соперника…</span>' : n ? ' <span class="on-badge">' + n + ' в сети</span>' : '');
   }
   function onLobby() {
     badge();
@@ -616,15 +644,74 @@ WP.Net = (function () {
       const pr = p.presence;
       // Меня позвали на матч
       if (pr.inv && pr.inv.to === me1 && pr.inv.code && !handledInv[pr.inv.code] && !(game && game.phase === 'play')) {
-        handledInv[pr.inv.code] = true; showInvite(p);
+        handledInv[pr.inv.code] = true;
+        // Пара из быстрого поиска — входим сами, без вопросов
+        if (pr.inv.auto) { if (search && !game) { const t = search.t; quickStop(true); if (hooks.beforeJoin) hooks.beforeJoin(); joinGame(pr.inv.code, t); } }
+        else showInvite(p);
       }
       // Мой вызов отклонили
       if (game && game.role === 'host' && game.phase === 'wait' && pr.decl && pr.decl.to === me1 && pr.decl.code === game.code) {
         msg = peerName(p) + ' отказался от матча'; leave().then(render);
       }
     }
-    if (!$('online').hidden) render();
+    if (search) matchTick();
+    else if (!$('online').hidden) render();
   }
+
+  // ---------- быстрый матч: случайный соперник из тех, кто сейчас ищет ----------
+  // Ищущие сортируются по времени начала поиска; пару составляют двое самых давних: первый создаёт матч и зовёт второго.
+  // Ушли в матч — следующая пара. Действуем, только когда список ищущих уже секунду не менялся (все видят одно и то же).
+  let search = null;
+  function quickStart(t) {
+    if (!room || game) return;
+    search = { t: t || Date.now(), skip: {}, partner: null, since: 0 };
+    room.presence({ v: 1, q: search.t, team: pref.team, len: pref.len, host: null, busy: null, inv: null }).catch(() => {});
+    badge(); render(); matchTick();
+  }
+  function quickStop(silent) {
+    if (!search) return;
+    search = null; clearTimeout(matchTick.t);
+    if (room) room.presence({ q: null }).catch(() => {});
+    badge(); if (!silent) render();
+  }
+  const searchers = () => othersOnline().filter(p => p.presence.q && !p.presence.busy && !p.presence.host && p.presence.st !== 'play' && !(search.skip[p.peer] > Date.now()));
+  async function matchTick() {
+    if (!search || !room) return;
+    clearTimeout(matchTick.t); matchTick.t = setTimeout(matchTick, 1000);
+    if (!$('online').hidden) render();
+    if (game) {
+      // Позвал пару, а она не пришла — снова в поиск, а этого соперника пока пропускаем
+      if (game.role === 'host' && game.auto && game.phase === 'wait' && Date.now() - game.auto > 10000) {
+        search.skip[game.autoPeer] = Date.now() + 15000;
+        await leave();
+        if (search) room.presence({ v: 1, q: search.t, host: null, busy: null, inv: null }).catch(() => {});
+      }
+      return;
+    }
+    const me1 = myPeer(); if (!me1) return;
+    const list = [{ peer: me1, t: search.t }].concat(searchers().map(p => ({ peer: p.peer, t: +p.presence.q })));
+    list.sort((a, b) => a.t - b.t || (a.peer < b.peer ? -1 : 1));
+    const sig = list.map(x => x.peer).join(','), now = Date.now();
+    if (sig !== search.sig) { search.sig = sig; search.sigAt = now; }
+    const i = list.findIndex(x => x.peer === me1);
+    if (i > 1 || list.length < 2 || now - search.sigAt < 1200) { search.partner = null; return; }
+    const partner = list[1 - i];
+    if (search.partner !== partner.peer) { search.partner = partner.peer; search.since = now; }
+    if (i === 0) quickHost(partner.peer);
+    // Второй ждёт приглашения от первого; не дождался — пропускаем его ненадолго
+    else if (now - search.since > 8000) { search.skip[partner.peer] = now + 15000; search.partner = null; }
+  }
+  async function quickHost(peer) {
+    if (quickHost.busy) return;
+    quickHost.busy = true;
+    try {
+      await hostGame(true);
+      if (!game || game.role !== 'host' || !search) { if (game && !search) await leave(); return; }
+      game.auto = Date.now(); game.autoPeer = peer;
+      room.presence({ q: null, inv: { to: peer, code: game.code, team: game.team, len: game.len, auto: 1 } }).catch(() => {});
+    } finally { quickHost.busy = false; }
+  }
+
   function showInvite(p) {
     const T = teamDef(p.presence.inv.team || p.presence.team);
     const box = $('netInvite');
@@ -661,13 +748,13 @@ WP.Net = (function () {
     if (!ready) h += '<p class="muted">Подключаемся…</p>';
     // Аккаунт
     if (ready && needLogin) {
-      h += '<div class="on-acc"><div><b>Войди, чтобы играть онлайн</b><small>Вход через Google: имя и фото возьмутся из аккаунта, статистика сохранится.</small></div></div><div class="row-btns"><button class="btn primary" data-net="login">Войти через Google</button></div>';
+      h += '<div class="on-acc"><div><b>Войди, чтобы играть онлайн</b><small>Через Google — имя и фото возьмутся из аккаунта, статистика сохранится. Без входа — сыграешь как «Гость».</small></div></div><div class="row-btns"><button class="btn primary" data-net="login">Войти через Google</button><button class="btn" data-net="anon">Играть без входа</button></div>';
       if (msg) h += '<p class="tac-msg">' + esc(msg) + '</p>';
       el.innerHTML = h; return;
     }
     if (me && (me.name || me.id)) {
       h += '<div class="on-acc">' + (me.avatarUrl ? '<img alt="" referrerpolicy="no-referrer" src="' + esc(me.avatarUrl) + '">' : '<span class="on-av" style="background:' + esc(me.color) + '"></span>') +
-        '<div><b>' + esc(me.name || 'Вы') + '</b><small>' + (fb ? 'Вход через Google' : 'Вход через аккаунт claude.ai') + ' · онлайн: ' + stats.w + ' побед, ' + stats.d + ' ничьих, ' + stats.l + ' поражений</small></div>' + (fb ? '<button class="btn small" data-net="logout">Выйти</button>' : '') + '</div>';
+        '<div><b>' + esc(me.name || 'Вы') + '</b><small>' + (fb ? (fb.auth.currentUser && fb.auth.currentUser.isAnonymous ? 'Гость, без входа' : 'Вход через Google') : 'Вход через аккаунт claude.ai') + ' · онлайн: ' + stats.w + ' побед, ' + stats.d + ' ничьих, ' + stats.l + ' поражений</small></div>' + (fb ? '<button class="btn small" data-net="logout">Выйти</button>' : '') + '</div>';
     } else if (ready && window.claude && window.claude.use) {
       h += '<div class="on-acc warn"><div><b>Вход не выполнен</b><small>Онлайн-матчи доступны тем, кто вошёл в claude.ai и кого владелец пригласил в игру по почте.</small></div></div>';
     }
@@ -683,22 +770,26 @@ WP.Net = (function () {
     // Кто сейчас в сети (помогает понять, видите ли вы друг друга)
     if (room) {
       const others = othersOnline();
-      const ST = { menu: 'в меню', wait: 'ждёт соперника', play: 'в матче', solo: 'играет один' };
-      h += '<div class="tac-sec"><div class="tac-lbl">Сейчас в сети · ' + (others.length + 1) + '</div>' + (others.length ? others.map(p => {
+      const ST = { menu: 'в меню', wait: 'ждёт соперника', play: 'в матче', solo: 'играет один', search: 'ищет соперника' };
+      h += '<div class="tac-sec"><div class="tac-lbl">Сейчас в сети · ' + (others.length + 1) + '</div>' + (others.length ? others.slice(0, 20).map(p => {
         const pr = p.presence, free = !pr.busy && pr.st !== 'play' && !(game && game.phase === 'play');
-        return '<div class="on-game"><span class="on-dot"></span><span><b>' + esc(p.isMe ? 'Ты (другое устройство)' : peerName(p)) + '</b><small>' + (ST[pr.host ? 'wait' : pr.st] || 'в игре') + '</small></span>' +
+        return '<div class="on-game"><span class="on-dot"></span><span><b>' + esc(p.isMe ? 'Ты (другое устройство)' : peerName(p)) + '</b><small>' + (ST[pr.q ? 'search' : pr.st === 'play' || pr.busy ? 'play' : pr.host ? 'wait' : pr.st] || 'в игре') + '</small></span>' +
           (free ? '<button class="btn small primary" data-net="invite" data-v="' + esc(p.peer) + '">Позвать на матч</button>' : '') + '</div>';
-      }).join('') : '<p class="small muted">Пока никого. Попроси друга открыть игру — он появится здесь, и его можно будет позвать на матч без кодов.</p>') + '</div>';
+      }).join('') + (others.length > 20 ? '<p class="small muted">и ещё ' + (others.length - 20) + '</p>' : '') : '<p class="small muted">Пока никого. Попроси друга открыть игру — он появится здесь, и его можно будет позвать на матч без кодов.</p>') + '</div>';
     }
     // Ожидание соперника
     if (game && game.role === 'host' && game.phase === 'wait') {
       h += '<div class="on-wait"><small>Код матча</small><b>' + esc(game.code.toUpperCase()) + '</b><p>Ждём соперника. Код вводить не обязательно — друг увидит твой матч в списке «Открытые матчи». Если всё-таки уходишь в WhatsApp, матч не пропадёт: когда вернёшься, он начнётся.</p><div class="row-btns" style="justify-content:center"><button class="btn primary" data-net="copy">Скопировать код</button><button class="btn" data-net="cancel">Отменить матч</button></div></div>';
     } else if (game && game.role === 'guest' && game.phase === 'wait') {
       h += '<div class="on-wait"><small>Подключаемся к матчу</small><b>' + esc(game.code.toUpperCase()) + '</b><p>' + esc(game.note || 'Ищем хозяина матча…') + '</p><button class="btn" data-net="cancel">Отменить</button></div>';
+    } else if (search) {
+      const n = searchers().length, sec = Math.floor((Date.now() - search.t) / 1000);
+      h += '<div class="on-wait"><small>Быстрый матч</small><b>Ищем соперника… ' + sec + ' с</b><p>' + (n ? 'Сейчас ищут: ' + (n + 1) + ' — подбираем пару.' : 'Пока ищешь только ты. Можно закрыть это окно и играть в меню — как найдём соперника, матч начнётся сам.') + '</p><button class="btn" data-net="qstop">Отменить поиск</button></div>';
     } else {
+      h += '<div class="row-btns" style="justify-content:center"><button class="btn primary big" data-net="quick">Быстрый матч</button></div><p class="small muted" style="text-align:center;margin-top:-4px">Случайный соперник из тех, кто сейчас в игре</p>';
       h += '<div class="tac-sec"><div class="tac-lbl">Твоя команда</div><div class="on-team"><button class="btn small" data-net="prev">‹</button><span>' + WP.flag(T.code) + ' <b>' + esc(T.name) + '</b></span><button class="btn small" data-net="next">›</button></div></div>' +
         '<div class="tac-sec"><div class="tac-lbl">Длина периода</div><div class="seg">' + [2, 4, 8].map(n => '<button data-net="len" data-v="' + n + '" aria-pressed="' + (pref.len === n) + '">' + n + ' мин</button>').join('') + '</div></div>' +
-        '<div class="row-btns"><button class="btn primary" data-net="host">Создать матч</button></div>' +
+        '<div class="row-btns"><button class="btn" data-net="host">Создать матч</button></div>' +
         '<div class="tac-sec"><div class="tac-lbl">Войти по коду</div><div class="on-code"><input id="onCode" maxlength="8" placeholder="например k3v6" autocomplete="off"><button class="btn" data-net="join">Войти</button></div></div>';
       const games = openGames();
       h += '<div class="tac-sec"><div class="tac-lbl">Открытые матчи</div>' + (games.length ? games.map(p => { const gt = teamDef(p.presence.team); return '<div class="on-game">' + WP.flag(gt.code) + '<span><b>' + esc(peerName(p)) + '</b><small>' + esc(gt.name) + ' · ' + (+p.presence.len || 4) + ' мин · код ' + esc(String(p.presence.host).toUpperCase()) + '</small></span><button class="btn small primary" data-net="play" data-v="' + esc(p.presence.host) + '">Играть</button></div>'; }).join('') : '<p class="small muted">Пока никто не ждёт соперника — создай матч сам.</p>') + '</div>';
@@ -726,6 +817,9 @@ WP.Net = (function () {
       if (a === 'host') hostGame();
       if (a === 'copy') copyCode();
       if (a === 'login') login();
+      if (a === 'anon') loginAnon();
+      if (a === 'quick') quickStart();
+      if (a === 'qstop') quickStop();
       if (a === 'logout') logout();
       if (a === 'invite') invite(b.dataset.v);
       if (a === 'cancel') { leave().then(render); }
