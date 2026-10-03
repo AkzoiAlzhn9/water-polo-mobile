@@ -45,9 +45,11 @@ WP.Net = (function () {
   const loadScript = (src) => new Promise((res, rej) => { const el = document.createElement('script'); el.src = src; el.onload = res; el.onerror = () => rej(new Error('не загрузился ' + src)); document.head.appendChild(el); });
   async function fbInit() {
     const B = 'https://www.gstatic.com/firebasejs/10.12.2/';
-    await loadScript(B + 'firebase-app-compat.js');
-    await loadScript(B + 'firebase-auth-compat.js');
-    await loadScript(B + 'firebase-database-compat.js');
+    if (!window.firebase) {
+      await loadScript(B + 'firebase-app-compat.js');
+      await loadScript(B + 'firebase-auth-compat.js');
+      await loadScript(B + 'firebase-database-compat.js');
+    }
     const app = firebase.initializeApp(WP.FIREBASE);
     const auth = app.auth();
     try { await auth.getRedirectResult(); } catch (e) { /* вход через переадресацию не удался */ }
@@ -168,7 +170,7 @@ WP.Net = (function () {
     const code = rndCode();
     let gr;
     try { gr = await room.join('wp-' + code); } catch (e) { msg = 'Не удалось создать комнату: ' + (e.code || e.message); render(); return; }
-    game = { role: 'host', code, room: gr, team: pref.team, len: pref.len, phase: 'wait', guestPeer: null, last: null, gc: 0, seq: 0, lastSnap: 0, bn: null, cd: null, tacKey: '' };
+    game = { role: 'host', code, room: gr, team: pref.team, len: pref.len, phase: 'wait', guestPeer: null, last: null, gc: 0, seq: 0, lastSnap: 0, bn: null, cd: null, tacKey: '', cur: null, inN: -1, ia: 0, sent: {}, rtt: 0 };
     room.presence({ v: 1, host: code, team: pref.team, len: pref.len, busy: null, nick: mock ? me.name : null }).catch(() => {});
     gr.presence({ v: 1, role: 'host', team: pref.team, len: pref.len, phase: 'wait' }).catch(() => {});
     gr.onPeers(onGamePeers, onRoomError);
@@ -192,7 +194,7 @@ WP.Net = (function () {
     if (!/^[a-z0-9]{3,8}$/.test(code)) { msg = 'Код — 4 латинские буквы или цифры'; render(); return; }
     let gr;
     try { gr = await room.join('wp-' + code); } catch (e) { msg = 'Не удалось войти: ' + (e.code || e.message); render(); return; }
-    game = { role: 'guest', code, room: gr, team: pref.team, phase: 'wait', buf: [], seq: -1, lastSend: 0, cnt: CNT.map(() => 0), gc: 0, g: {}, prevSt: null, bnId: 0, cdId: 0, scores: [0, 0] };
+    game = { role: 'guest', code, room: gr, team: pref.team, phase: 'wait', buf: [], seq: -1, lastSend: 0, cnt: CNT.map(() => 0), gc: 0, g: {}, prevSt: null, bnId: 0, cdId: 0, scores: [0, 0], n: 0, sentAt: {}, hist: [], pr: null, off: { x: 0, z: 0 }, rtt: 0 };
     gr.presence({ v: 1, role: 'guest', team: pref.team, nick: mock ? me.name : null }).catch(() => {});
     gr.onPeers(onGamePeers, onRoomError);
     msg = ''; render();
@@ -216,15 +218,19 @@ WP.Net = (function () {
       if (game.phase === 'wait' && g) startAsHost(g);
       // Соперник свернул игру (WhatsApp и т.п.) — не сдаёмся сразу: пауза и ждём до 90 с
       if (game.phase === 'play') {
-        if (!g && !game.awayAt) { game.awayAt = Date.now(); notice('Соперник свернул игру — пауза, ждём его до 90 с'); }
-        if (g && game.awayAt) { game.awayAt = 0; game.guestPeer = g.peer; game.last = null; notice('Соперник вернулся — играем!'); }
+        if (!g && !game.awayAt && !dcAlive()) { game.awayAt = Date.now(); notice('Соперник свернул игру — пауза, ждём его до 90 с'); }
+        if (g && game.awayAt) { game.awayAt = 0; game.guestPeer = g.peer; game.last = null; game.cur = null; game.inN = -1; notice('Соперник вернулся — играем!'); if (!dcOpen()) rtcOffer(); }
         else if (g) game.guestPeer = g.peer;
+        const r = g && g.presence.rtc;
+        if (r && r.a && r.id === game.rtcId && game.pc && !game.rtcSet) { game.rtcSet = true; game.pc.setRemoteDescription({ type: 'answer', sdp: r.a }).catch(() => {}); }
       }
     } else {
       const h = ch.peers.find(p => !p.sameTab && p.presence && p.presence.role === 'host');
       if (h && game.phase === 'wait' && h.presence.phase === 'play' && h.presence.away) startAsGuest(h);
+      const r = h && h.presence.rtc;
+      if (r && r.o && r.id !== game.rtcId) rtcAnswer(game, r);
       if (game.phase === 'play') {
-        if (!h && !game.awayAt) { game.awayAt = Date.now(); notice('Хозяин свернул игру — ждём его возвращения'); }
+        if (!h && !game.awayAt && !dcAlive()) { game.awayAt = Date.now(); notice('Хозяин свернул игру — ждём его возвращения'); }
         if (h && game.awayAt) { game.awayAt = 0; notice('Хозяин вернулся — играем!'); }
       }
     }
@@ -237,6 +243,7 @@ WP.Net = (function () {
     room.presence({ busy: true, inv: null, st: 'play' }).catch(() => {});
     closeLobby();
     hooks.start({ home: teamDef(game.team), away: teamDef(away), mode: '1p', humanSide: 0, periodMin: game.len, difficulty: 1, shootout: true, net: { role: 'host', code: game.code } });
+    rtcOffer();
   }
   function startAsGuest(h) {
     game.phase = 'play';
@@ -256,6 +263,8 @@ WP.Net = (function () {
   // Хозяин: пока соперника нет, матч стоит; не вернулся вовремя — за него играет ИИ
   function hostWaiting() {
     if (!game || game.role !== 'host' || game.phase !== 'play' || !game.awayAt) return false;
+    // Сервер потерял соперника, но напрямую (P2P) он на связи — играем дальше
+    if (dcAlive()) { game.awayAt = 0; return false; }
     if (Date.now() - game.awayAt > AWAY_HOST * 1000) { game.phase = 'solo'; game.awayAt = 0; if (hooks.left) hooks.left('Соперник не вернулся — за его команду играет ИИ'); return false; }
     return true;
   }
@@ -268,6 +277,7 @@ WP.Net = (function () {
 
   async function leave() {
     const g = game; game = null;
+    if (g) rtcClose(g);
     if (room) room.presence({ host: null, busy: null, inv: null }).catch(() => {});
     if (g && g.room) { try { await g.room.leave(); } catch (e) { /* уже вышли */ } }
   }
@@ -287,13 +297,21 @@ WP.Net = (function () {
   function hostInput(m) {
     if (!game || game.role !== 'host' || game.phase !== 'play') return null;
     const g = game.room.peers().find(p => p.peer === game.guestPeer);
-    const i = g && g.presence && g.presence.i;
-    if (!i || !Array.isArray(i.c)) return null;
+    // Ввод гостя идёт двумя путями — напрямую (P2P) и через сервер; берём самый свежий по номеру
+    const now = performance.now();
+    for (const c of [g && g.presence && g.presence.i, game.dcIn]) if (c && Array.isArray(c.c) && (+c.n || 0) >= game.inN) { if ((+c.n || 0) > game.inN || !game.cur) game.curAt = now; game.cur = c; game.inN = +c.n || 0; }
+    const i = game.cur;
+    if (!i) return null;
+    // Ввод гостя замолчал (свернул игру, пропала связь) — его пловец не плывёт дальше по последнему нажатию
+    if (now - game.curAt > 1500) return { x: 0, z: 0, mag: 0 };
+    game.ia = +i.n || 0;
+    if (i.aq && game.sent[i.aq] && i.aq !== game.aqSeen) { game.aqSeen = i.aq; rttAdd(now - game.sent[i.aq]); }
     const out = { x: +i.x || 0, z: +i.z || 0, mag: Math.min(1, +i.m || 0) };
+    if (i.as !== undefined) out.assist = !!i.as;
     HELD.forEach((k, b) => { out[k] = !!(i.h & (1 << b)); });
     const last = game.last || i.c;
-    CNT.forEach((k, j) => { out[k] = i.c[j] !== last[j]; });
-    game.last = i.c.slice();
+    CNT.forEach((k, j) => { out[k] = (+i.c[j] || 0) > (+last[j] || 0); });
+    game.last = i.c.map((v, j) => Math.max(+v || 0, +last[j] || 0));
     if (i.gc !== game.gc) { game.gc = i.gc; out.passGest = i.pg || null; out.shootGest = i.sg || null; out.thruUp = !!i.tu; }
     else { out.passGest = null; out.shootGest = null; out.thruUp = false; }
     // Тактика гостя приходит вместе с вводом
@@ -305,10 +323,14 @@ WP.Net = (function () {
   }
   function hostFrame(m) {
     if (!game || game.role !== 'host' || game.phase !== 'play') return;
-    const now = performance.now();
-    if (now - game.lastSnap < 40) return;
+    const now = performance.now(), dc = dcOpen();
+    // Напрямую (P2P) — 30 снимков в секунду; через сервер — 25, а при живом P2P сервер получает лишь раз в секунду про запас
+    if (now - game.lastSnap < (dc ? 33 : 40)) return;
     game.lastSnap = now;
-    game.room.presence({ s: snapshot(m) }).catch(() => {});
+    const s = snapshot(m);
+    game.sent[s.q] = now; delete game.sent[s.q - 300];
+    if (dc) { try { dc.send(JSON.stringify({ s })); } catch (e) { game.dc = null; } }
+    if (!dc || now - (game.lastPres || 0) > 1000) { game.lastPres = now; game.room.presence({ s }).catch(() => {}); }
   }
   function snapshot(m) {
     const P = [];
@@ -329,6 +351,7 @@ WP.Net = (function () {
       b: [r2(b.pos.x), r2(b.pos.y), r2(b.pos.z), h ? m.teams.indexOf(h.team) : -1, h ? h.num : 0],
       c1: m.controlled.p1 ? m.controlled.p1.num : 0, c2: m.controlled.p2 ? m.controlled.p2.num : 0,
       to: [m.teams[0].timeouts, m.teams[1].timeouts], p: P,
+      ia: game.ia || 0, s2: m.controlled.p2 ? r2(m.controlled.p2.stamina) : 1,
     };
     if (game.bn) s.bn = game.bn;
     if (game.cd) s.cd = game.cd;
@@ -348,20 +371,150 @@ WP.Net = (function () {
     if (!game || game.role !== 'guest' || !game.room) return;
     const h = hostPeer();
     const s = h && h.presence && h.presence.s;
-    if (s && s.q !== game.seq) { game.seq = s.q; game.buf.push({ at: performance.now(), s }); if (game.buf.length > 10) game.buf.shift(); }
+    if (s) takeSnap(s);
     if (game.phase === 'play' && game.awayAt && Date.now() - game.awayAt > AWAY_GUEST * 1000) { game.phase = 'gone'; if (hooks.left) hooks.left('Хозяин матча так и не вернулся'); return; }
     applyBuffered(m);
+    if (game.phase === 'play') predict(m, inp);
     if (inp) collectInput(m, inp);
+  }
+  // Снимки приходят двумя путями (P2P и сервер) — берём только более новые
+  function takeSnap(s) {
+    if (!(s.q > game.seq)) return;
+    const now = performance.now();
+    game.seq = s.q; game.buf.push({ at: now, s }); if (game.buf.length > 10) game.buf.shift();
+    if (s.ia && game.sentAt[s.ia] && s.ia !== game.iaSeen) { game.iaSeen = s.ia; rttAdd(now - game.sentAt[s.ia]); }
+  }
+  function rttAdd(v) { if (game && v > 0 && v < 5000) game.rtt = game.rtt ? game.rtt * 0.85 + v * 0.15 : v; }
+
+  // Свой пловец у гостя: плывёт сразу по нажатию (так же, как его сдвинет хозяин), а снимки хозяина лишь мягко поправляют.
+  // Хозяин сообщает номер последнего применённого ввода (ia) — от его позиции заново проигрываем ещё не учтённые нажатия.
+  function predict(m, inp) {
+    const now = performance.now(), dt = game.pt ? Math.min(0.05, (now - game.pt) / 1000) : 0;
+    game.pt = now;
+    const hs = game.hist;
+    hs.push({ t: now, dt, x: inp ? +inp.x || 0 : 0, z: inp ? +inp.z || 0 : 0, mag: inp ? Math.min(1, +inp.mag || 0) : 0, spr: !!(inp && inp.sprint) });
+    while (hs.length > 2 && hs[0].t < now - 1500) hs.shift();
+    const L = game.buf.length ? game.buf[game.buf.length - 1].s : null, p = m.controlled.p1;
+    const from = L && L.ia ? game.sentAt[L.ia] : 0, st = L ? STATES[L.st] : '';
+    const ok = p && from && L.c2 === p.num && !p.excluded && (st === 'live' || (st === 'dead' && !p.hasBall));
+    const row = ok ? L.p.find(r => r[0] === 1 && r[1] === p.num) : null;
+    if (!row) { game.pr = null; return; }
+    if (L.s2 != null) p.stamina = L.s2;
+    const ix = p.x, iz = p.z;
+    let pr = game.pr;
+    if (!pr || pr.num !== p.num) { pr = game.pr = replay(m, p, row, from, p.heading); game.off = { x: ix - pr.x, z: iz - pr.z }; }
+    else {
+      stepPred(m, p, pr, hs[hs.length - 1]);
+      if (pr.q !== L.q) { const n = replay(m, p, row, from, pr.h); game.off.x += pr.x - n.x; game.off.z += pr.z - n.z; pr = game.pr = n; }
+    }
+    pr.q = L.q;
+    const o = game.off, k = Math.exp(-dt * 6);
+    o.x *= k; o.z *= k;
+    if (Math.hypot(o.x, o.z) > 2.5) { o.x = 0; o.z = 0; }
+    p.x = pr.x + o.x; p.z = pr.z + o.z; p.vx = pr.vx; p.vz = pr.vz;
+    const sp = Math.hypot(pr.vx, pr.vz);
+    if (sp > 0.25 && !(p.hasBall && sp < 0.9)) { const rate = (p.hasBall ? 3.8 : 5.5) * 1.6 * dt, d = WP.angNorm(Math.atan2(pr.vz, pr.vx) - pr.h); pr.h = WP.angNorm(pr.h + Math.max(-rate, Math.min(rate, d))); }
+    else pr.h = angLerp(pr.h, p.heading, Math.min(1, dt * 8));
+    p.heading = pr.h;
+    if (m.ball.holder === p) { m.ball.pos.x += p.x - ix; m.ball.pos.z += p.z - iz; }
+  }
+  function replay(m, p, row, from, h) {
+    const s = { num: p.num, x: row[2], z: row[3], vx: row[6], vz: row[7], h };
+    for (const e of game.hist) if (e.t > from) stepPred(m, p, s, e);
+    return s;
+  }
+  // То же, что Player.move для игрока под управлением человека
+  function stepPred(m, p, s, e) {
+    if (!e || !e.dt) return;
+    const mm = p.moveMode; p.moveMode = e.spr ? 'sprint' : 'swim';
+    const vmax = p.maxSpeed(); p.moveMode = mm;
+    let dx = e.x, dz = e.z;
+    const mg = Math.hypot(dx, dz), idle = !p.hasBall && e.mag < 0.12;
+    const want = idle ? 0 : Math.min(1, mg) * vmax;
+    if (mg > 0.001) { dx /= mg; dz /= mg; }
+    const tvx = dx * want, tvz = dz * want, ax = tvx - s.vx, az = tvz - s.vz, am = Math.hypot(ax, az);
+    const acc = (want > Math.hypot(s.vx, s.vz) ? 3.0 : 4.5) * (idle ? 1 : 1.6) * (0.8 + 0.4 * p.attrs.spd / 100) * e.dt;
+    if (am > acc) { s.vx += ax / am * acc; s.vz += az / am * acc; } else { s.vx = tvx; s.vz = tvz; }
+    s.x += s.vx * e.dt; s.z += s.vz * e.dt;
+    const b = m.boundsFor(p);
+    s.x = Math.max(b.x0, Math.min(b.x1, s.x)); s.z = Math.max(b.z0, Math.min(b.z1, s.z));
+  }
+
+  // ---------- прямое соединение двух телефонов (WebRTC); сервер Firebase — только для знакомства и про запас ----------
+  const ICE = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }];
+  const rtcOk = () => !!(fb && window.RTCPeerConnection);
+  const dcOpen = () => (game && game.dc && game.dc.readyState === 'open' ? game.dc : null);
+  const dcAlive = () => !!(dcOpen() && performance.now() - (game.dcAt || 0) < 2000);
+  function waitIce(pc) {
+    return new Promise(res => {
+      if (pc.iceGatheringState === 'complete') return res();
+      const t = setTimeout(res, 2500);
+      pc.addEventListener('icegatheringstatechange', () => { if (pc.iceGatheringState === 'complete') { clearTimeout(t); res(); } });
+    });
+  }
+  function rtcClose(g) { if (g.pc) { try { g.pc.close(); } catch (e) { /* уже закрыто */ } } g.pc = null; g.dc = null; }
+  function rtcWire(g, pc, ch) {
+    ch.onopen = () => { if (g.pc !== pc) return; g.dc = ch; g.rtcTries = 0; g.room.presence({ rtc: null }).catch(() => {}); };
+    ch.onclose = () => { if (g.dc === ch) g.dc = null; };
+    ch.onmessage = (e) => {
+      if (game !== g) return;
+      let d; try { d = JSON.parse(e.data); } catch (x) { return; }
+      g.dcAt = performance.now();
+      if (g.awayAt) g.awayAt = 0;
+      if (g.role === 'guest' && d.s) takeSnap(d.s);
+      if (g.role === 'host' && d.i) g.dcIn = d.i;
+    };
+    pc.onconnectionstatechange = () => {
+      if (g.pc !== pc || !['failed', 'closed'].includes(pc.connectionState)) return;
+      g.dc = null;
+      // Хозяин пробует соединиться заново, но не бесконечно: дальше игра идёт через сервер
+      if (g.role === 'host' && (g.rtcTries || 0) < 3) setTimeout(() => { if (game === g && g.phase === 'play' && !dcOpen()) rtcOffer(); }, 3000);
+    };
+  }
+  async function rtcOffer() {
+    const g = game;
+    if (!rtcOk() || !g || g.role !== 'host') return;
+    rtcClose(g);
+    g.rtcTries = (g.rtcTries || 0) + 1;
+    const id = (g.rtcId || 0) + 1, pc = new RTCPeerConnection({ iceServers: ICE });
+    g.rtcId = id; g.pc = pc; g.rtcSet = false;
+    try {
+      rtcWire(g, pc, pc.createDataChannel('g', { ordered: false, maxRetransmits: 0 }));
+      await pc.setLocalDescription(await pc.createOffer());
+      await waitIce(pc);
+      if (game === g && g.pc === pc) g.room.presence({ rtc: { id, o: pc.localDescription.sdp } }).catch(() => {});
+    } catch (e) { if (g.pc === pc) rtcClose(g); }
+  }
+  async function rtcAnswer(g, r) {
+    if (!rtcOk()) return;
+    rtcClose(g);
+    const pc = new RTCPeerConnection({ iceServers: ICE });
+    g.rtcId = r.id; g.pc = pc;
+    pc.ondatachannel = (e) => rtcWire(g, pc, e.channel);
+    try {
+      await pc.setRemoteDescription({ type: 'offer', sdp: r.o });
+      await pc.setLocalDescription(await pc.createAnswer());
+      await waitIce(pc);
+      if (game === g && g.pc === pc) g.room.presence({ rtc: { id: r.id, a: pc.localDescription.sdp } }).catch(() => {});
+    } catch (e) { if (g.pc === pc) rtcClose(g); }
+  }
+  // Для плашки в матче: как идёт связь и какая задержка
+  function info() {
+    if (!game || game.phase !== 'play') return null;
+    return { p2p: !!dcOpen(), rtt: Math.round(game.rtt || 0) };
   }
   function collectInput(m, inp) {
     CNT.forEach((k, j) => { if (inp[k]) game.cnt[j]++; });
     if (inp.passGest || inp.shootGest || inp.thruUp) { game.gc++; game.g = { pg: inp.passGest || null, sg: inp.shootGest || null, tu: !!inp.thruUp }; }
-    const now = performance.now();
-    if (now - game.lastSend < 33) return;
+    const now = performance.now(), dc = dcOpen();
+    if (now - game.lastSend < (dc ? 16 : 33)) return;
     game.lastSend = now;
     let hb = 0; HELD.forEach((k, b) => { if (inp[k]) hb |= 1 << b; });
-    const t = m.teams[1].tac;
-    game.room.presence({ i: { x: r2(inp.x || 0), z: r2(inp.z || 0), m: r2(inp.mag || 0), h: hb, c: game.cnt.slice(), gc: game.gc, pg: game.g.pg || null, sg: game.g.sg || null, tu: !!game.g.tu, tac: { att: t.att, pp: t.pp, def: t.def, move: t.move } } }).catch(() => {});
+    const t = m.teams[1].tac, n = ++game.n;
+    game.sentAt[n] = now; delete game.sentAt[n - 400];
+    const i = { n, aq: game.seq > 0 ? game.seq : 0, as: WP.Input.opts.assist ? 1 : 0, x: r2(inp.x || 0), z: r2(inp.z || 0), m: r2(inp.mag || 0), h: hb, c: game.cnt.slice(), gc: game.gc, pg: game.g.pg || null, sg: game.g.sg || null, tu: !!game.g.tu, tac: { att: t.att, pp: t.pp, def: t.def, move: t.move } };
+    if (dc) { try { dc.send(JSON.stringify({ i })); } catch (e) { game.dc = null; } }
+    if (!dc || now - (game.lastPres || 0) > 250) { game.lastPres = now; game.room.presence({ i }).catch(() => {}); }
   }
   // Рисуем с задержкой ~100 мс между двумя снимками — движение плавное даже при неровной сети
   function applyBuffered(m) {
@@ -620,9 +773,10 @@ WP.Net = (function () {
   }
 
   return {
-    init, openLobby, closeLobby, bindUi, leave, attachHost, attachGuest, hostInput, hostFrame, guestFrame, status, hostWaiting, start, setStatus,
+    init, openLobby, closeLobby, bindUi, leave, attachHost, attachGuest, hostInput, hostFrame, guestFrame, status, info, hostWaiting, start, setStatus,
     setHooks(h) { hooks = h; },
     get role() { return game ? game.role : null; },
     get phase() { return game ? game.phase : null; },
+    get dbg() { return game; },
   };
 })();

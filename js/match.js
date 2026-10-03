@@ -1005,7 +1005,7 @@
         p.input.x = inp.x; p.input.z = inp.z; p.input.sprint = inp.sprint;
         // Без нажатий защитник сам держит позицию (помощник), как только тронул стик — управляешь ты
         // Помощник в защите можно выключить в «Настройке управления» — тогда без нажатий игрок стоит на месте
-        const idle = WP.Input.opts.assist && !p.hasBall && inp.mag < 0.12 && !(p.action && p.action.type === 'steal');
+        const idle = (inp.assist !== undefined ? inp.assist : WP.Input.opts.assist) && !p.hasBall && inp.mag < 0.12 && !(p.action && p.action.type === 'steal');
         p.input.active = !scripted && !receiving && !(p.isGK && !p.hasBall) && !idle;
         if (inp.challenge) this.requestChallenge(team);
         if (inp.play) this.callScreen(team, !p.hasBall && this.cfg.pc ? p : null);
