@@ -20,6 +20,16 @@
   }
 
   // Подбор начальной скорости с учётом гравитации и сопротивления воздуха
+  // Отскок от воды: мяч, вошедший в воду полого и быстро, отскакивает (бросок «от воды» — чётче и выше). true — отскочил
+  WP.waterBounce = function (v, sk) {
+    const vh = Math.hypot(v.x, v.z), vy = -v.y;
+    if (!(vh > 7 && vy < vh * (sk ? 0.6 : 0.42))) return false;
+    v.y = sk ? Math.max(vy * 0.62, 1.6) : vy * 0.48;
+    const f = sk ? 0.84 : 0.8;
+    v.x *= f; v.z *= f;
+    return true;
+  };
+
   WP.solveThrow = function (from, to, speed, high) {
     const g = R.G;
     const aim = to.clone();
@@ -137,16 +147,19 @@
     integrate(h, ev) {
       const p = this.pos, v = this.vel;
       const floatY = 0.07 + this.world.waveHeight(p.x, p.z);
-      if (p.y > floatY + 0.02 || v.y > 0.3) {
+      // Быстро падающий мяч считаем летящим до самой воды — иначе он «прилипал» к поверхности в 2 см над ней и не отскакивал
+      if (p.y > floatY + 0.02 || v.y > 0.3 || v.y < -0.8) {
         const sp = v.length();
         v.x -= R.DRAG * sp * v.x * h; v.z -= R.DRAG * sp * v.z * h;
         v.y -= (R.DRAG * sp * v.y + R.G) * h;
         p.addScaledVector(v, h);
         if (p.y <= floatY && v.y < 0) {
           const vh = Math.hypot(v.x, v.z), vy = -v.y;
-          if (vh > 7 && vy < vh * 0.42 && this.inGoal === 0) {
-            v.y = vy * 0.48; v.x *= 0.8; v.z *= 0.8;
-            v.x += (Math.random() - 0.5) * 0.6; v.z += (Math.random() - 0.5) * 0.6;
+          // Бросок «от воды» отскакивает чётко и вверх (вратарь ждёт низом), чуть непредсказуемо по направлению
+          const sk = this.flight && this.flight.type === 'shot' && this.flight.kind === 'skip' && !this.flight.skipped;
+          if (this.inGoal === 0 && WP.waterBounce(v, sk)) {
+            v.x += (Math.random() - 0.5) * 0.3; v.z += (Math.random() - 0.5) * (sk ? 0.9 : 0.6);
+            if (sk) this.flight.skipped = true;
             p.y = floatY + 0.001;
             ev.push({ type: 'skip', speed: vh });
           } else {

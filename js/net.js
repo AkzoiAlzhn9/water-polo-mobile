@@ -634,7 +634,9 @@ WP.Net = (function () {
   const othersOnline = () => (room ? room.peers().filter(p => !p.sameTab && p.presence && p.presence.v === 1) : []);
   function badge() {
     const b = $('btnOnline'); if (!b) return;
-    const n = othersOnline().length;
+    const n = othersOnline().length, sub = $('onBadge');
+    // Плитка «Онлайн» на обложке: строка под названием
+    if (sub) { sub.textContent = search ? 'Ищем соперника…' : n ? n + ' в сети' : 'Игра с людьми'; sub.classList.toggle('live', !!(search || n)); return; }
     b.innerHTML = 'Онлайн' + (search ? ' <span class="on-badge">ищем соперника…</span>' : n ? ' <span class="on-badge">' + n + ' в сети</span>' : '');
   }
   function onLobby() {

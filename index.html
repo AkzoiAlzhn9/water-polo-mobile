@@ -48,6 +48,7 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .sb-shot { display: flex; align-items: center; justify-content: center; min-width: 58px; background: #120a06; border-left: 1px solid var(--line); }
 .sb-shot span { font-size: 34px; font-weight: 800; color: var(--accent); font-variant-numeric: tabular-nums; }
 .sb-shot.low span { color: var(--red); }
+.sb-shot.empty { display: none; }
 .excl-row { position: absolute; left: 16px; top: calc(114px + env(safe-area-inset-top, 0px)); display: flex; flex-direction: column; gap: 4px; font-family: var(--display); }
 .excl-row .pill { display: inline-flex; align-items: center; gap: 6px; background: rgba(255,75,75,.16); border: 1px solid rgba(255,75,75,.5); color: #ffd6d6; padding: 1px 8px; border-radius: 3px; font-size: 15px; font-variant-numeric: tabular-nums; width: max-content; }
 .excl-row .pill b { color: var(--red); }
@@ -157,8 +158,66 @@ kbd { font: 600 12px var(--display); background: rgba(255,255,255,.1); border: 1
 .btn.primary { background: var(--accent); color: #1a1204; border-color: var(--accent); }
 
 /* Меню */
-.menu { align-items: stretch; background: linear-gradient(90deg, rgba(4,12,19,.94) 0%, rgba(4,12,19,.82) 38%, rgba(4,12,19,0) 72%); }
-.menu-panel { width: min(560px, 100%); padding: 32px 16px 24px 40px; overflow-y: auto; display: flex; flex-direction: column; gap: 18px; box-sizing: border-box; }
+.menu { align-items: stretch; background: radial-gradient(110% 95% at 0% 0%, rgba(9,46,74,.9) 0%, rgba(4,14,23,.88) 42%, rgba(4,12,19,.3) 72%, rgba(4,12,19,0) 100%), linear-gradient(90deg, rgba(4,12,19,.8) 0%, rgba(4,12,19,.5) 45%, rgba(4,12,19,0) 75%); }
+.menu[data-view="home"] .setup, .menu[data-view="setup"] .cover { display: none; }
+/* Обложка */
+.cover { width: min(600px, 100%); box-sizing: border-box; padding: 32px 18px 20px 44px; display: flex; flex-direction: column; gap: 16px; overflow-y: auto; animation: homeIn .45s ease both; }
+@keyframes homeIn { from { opacity: 0; transform: translateX(-14px); } }
+.home-brand { display: flex; align-items: center; gap: 16px; }
+.logo-ball { width: 84px; height: 84px; flex: none; filter: drop-shadow(0 8px 18px rgba(0,0,0,.45)); animation: bob 3.4s ease-in-out infinite; }
+@keyframes bob { 50% { transform: translateY(-4px) rotate(-7deg); } }
+.cover .title { font-size: clamp(40px, 6.2vw, 74px); }
+.hero { position: relative; display: grid; gap: 12px; text-align: left; padding: 16px 20px; border-radius: 14px; border: 1px solid rgba(255,194,58,.45); cursor: pointer; color: var(--text); overflow: hidden; background: linear-gradient(135deg, #0f4268 0%, #0a2a44 48%, #061827 100%); box-shadow: 0 18px 40px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.1); transition: transform .18s, box-shadow .18s; }
+.hero::before { content: ""; position: absolute; top: -60%; right: -12%; width: 64%; height: 220%; background: linear-gradient(100deg, transparent 0 38%, rgba(61,214,245,.15) 50%, transparent 62%); transform: rotate(10deg); pointer-events: none; }
+.hero::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: linear-gradient(90deg, var(--home), var(--accent) 50%, var(--away)); opacity: .85; }
+.hero:hover { transform: translateY(-2px); box-shadow: 0 22px 46px rgba(0,0,0,.5), 0 0 0 3px rgba(255,194,58,.22); }
+.hero:active { transform: translateY(0) scale(.99); }
+.hero-tag { font: 700 12px var(--display); letter-spacing: .16em; text-transform: uppercase; color: var(--cyan); }
+.hero-vs { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 10px; }
+.hv-team { display: grid; justify-items: center; gap: 3px; min-width: 0; }
+.hv-flag { display: block; width: 50px; }
+.hv-team b { font: 800 40px/1 var(--display); letter-spacing: .03em; }
+.hv-team small { font-size: 12px; color: #b9d3df; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hero-vs em { font: italic 800 26px var(--display); color: var(--accent); }
+.hero-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.hero-meta { font-size: 13px; color: #b9d3df; }
+.hero-go { display: inline-flex; align-items: center; gap: 8px; background: var(--accent); color: #1a1204; font: 800 24px/1 var(--display); letter-spacing: .08em; text-transform: uppercase; padding: 11px 22px; border-radius: 999px; box-shadow: 0 6px 18px rgba(255,194,58,.35); }
+.hero-go svg { width: 16px; height: 16px; fill: currentColor; }
+.setup-link { align-self: flex-start; background: none; border: 0; color: var(--cyan); cursor: pointer; padding: 0 2px; font-size: 14px; margin-top: -6px; }
+.setup-link:hover { text-decoration: underline; text-underline-offset: 3px; }
+.tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.tile { display: grid; grid-template-columns: 40px minmax(0, 1fr); grid-template-rows: auto auto; column-gap: 12px; align-items: center; text-align: left; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--line); background: rgba(10,26,39,.8); backdrop-filter: blur(6px); cursor: pointer; transition: border-color .15s, transform .15s, background .15s; }
+.tile:hover { border-color: rgba(255,194,58,.55); transform: translateY(-1px); background: rgba(14,36,54,.88); }
+.tile svg { grid-row: 1 / 3; width: 40px; height: 40px; padding: 8px; box-sizing: border-box; border-radius: 10px; background: rgba(61,214,245,.12); stroke: var(--cyan); fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.tile b { font: 800 20px/1.05 var(--display); letter-spacing: .03em; }
+.tile small { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.t-online svg { background: rgba(53,196,106,.14); stroke: #5fe08f; }
+#onBadge.live { color: #7ff0a8; }
+#onBadge.live::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #35c46a; margin-right: 6px; vertical-align: 1px; box-shadow: 0 0 0 3px rgba(53,196,106,.22); }
+.home-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; font-size: 13px; color: var(--muted); margin-top: auto; }
+.home-foot button { background: none; border: 0; padding: 0; color: var(--cyan); cursor: pointer; font-size: 13px; }
+.home-foot button:hover { text-decoration: underline; text-underline-offset: 3px; }
+.home-foot span { font-family: var(--display); letter-spacing: .04em; }
+/* Настройка матча */
+.setup { animation: homeIn .3s ease both; }
+.setup-head { display: flex; align-items: center; gap: 12px; }
+.setup-head h2 { margin: 0; font: 800 32px/1 var(--display); letter-spacing: .02em; }
+.back-btn { width: 40px; height: 40px; flex: none; border-radius: 10px; border: 1px solid var(--line); background: rgba(10,26,39,.8); display: grid; place-items: center; cursor: pointer; }
+.back-btn:hover { border-color: rgba(255,194,58,.55); }
+.back-btn svg { width: 20px; height: 20px; stroke: var(--text); fill: none; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+/* Телефон горизонтально: обложка в две колонки */
+@media (max-height: 540px) and (orientation: landscape) {
+  .cover { width: 100%; display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(0, 1fr); grid-template-areas: "brand tiles" "hero tiles" "link foot"; grid-template-rows: auto 1fr auto; gap: 8px 16px; padding: calc(10px + env(safe-area-inset-top, 0px)) calc(16px + env(safe-area-inset-right, 0px)) calc(8px + env(safe-area-inset-bottom, 0px)) calc(16px + env(safe-area-inset-left, 0px)); }
+  .home-brand { grid-area: brand; gap: 10px; } .hero { grid-area: hero; align-self: center; padding: 12px 14px; gap: 8px; } .setup-link { grid-area: link; margin: 0; align-self: center; }
+  .tiles { grid-area: tiles; align-content: center; gap: 8px; } .home-foot { grid-area: foot; margin: 0; } .home-foot span { display: none; }
+  .logo-ball { width: 48px; height: 48px; } .cover .title { font-size: 32px; } .cover .eyebrow { font-size: 10px; letter-spacing: .1em; }
+  .hv-flag { width: 38px; } .hv-team b { font-size: 30px; } .hero-vs em { font-size: 20px; } .hero-go { font-size: 18px; padding: 8px 16px; } .hero-meta { font-size: 12px; }
+  .tile { padding: 10px; grid-template-columns: 34px minmax(0, 1fr); column-gap: 10px; } .tile svg { width: 34px; height: 34px; padding: 7px; } .tile b { font-size: 17px; } .tile small { white-space: normal; font-size: 11px; line-height: 1.2; }
+  .home-foot button { text-shadow: 0 1px 3px rgba(0,0,0,.8); }
+  .menu-panel.setup { width: 100%; max-width: 640px; padding: calc(10px + env(safe-area-inset-top, 0px)) 16px 12px calc(16px + env(safe-area-inset-left, 0px)); gap: 10px; }
+  .setup-head h2 { font-size: 24px; } .setup .tp-meta { display: none; }
+}
+.menu-panel { width: min(560px, 100%); padding: 28px 16px 24px 40px; overflow-y: auto; display: flex; flex-direction: column; gap: 18px; box-sizing: border-box; }
 .eyebrow { font: 600 13px var(--display); letter-spacing: .16em; text-transform: uppercase; color: var(--cyan); }
 .title { font: italic 800 clamp(44px, 7.8vw, 88px)/.9 var(--display); margin: 0; letter-spacing: -.01em; }
 .title span { display: block; color: transparent; -webkit-text-stroke: 2px var(--accent); font-style: normal; letter-spacing: .02em; }
@@ -518,7 +577,24 @@ body.lefty.tb-large #stick { transform-origin: bottom right; }
   .ctl-grid, .lineups, .scorers { grid-template-columns: 1fr; }
   .scoreline { font-size: 46px; }
 }
-@media (prefers-reduced-motion: reduce) { #feed .ln { animation: none; } #banner { transition: none; } }
+/* Оформление матча: табло как в трансляции, объёмные кнопки, яркий «ГОЛ» */
+.sb { background: linear-gradient(180deg, rgba(15,37,56,.95), rgba(6,17,27,.95)); border-color: rgba(150,205,228,.24); border-radius: 8px; box-shadow: 0 8px 26px rgba(0,0,0,.42), inset 0 1px 0 rgba(255,255,255,.07); }
+.sb::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 2px; background: linear-gradient(90deg, var(--cyan), var(--accent)); z-index: 1; }
+.sb-score { background: rgba(255,255,255,.07); border-radius: 4px; text-align: center; line-height: 1.15; }
+.sb-shot { background: radial-gradient(circle at 50% 38%, #3a2406, #120a06 75%); }
+.icon-btn, .back-btn { border-radius: 10px; background: linear-gradient(180deg, rgba(15,37,56,.92), rgba(6,17,27,.92)); }
+#stick { background: radial-gradient(circle, rgba(255,255,255,.04) 0 55%, rgba(61,214,245,.1) 56% 62%, rgba(255,255,255,.05) 63%); border-color: rgba(150,205,228,.28); }
+#stick i { background: radial-gradient(circle at 40% 35%, rgba(255,255,255,.55), rgba(190,225,240,.22) 70%); box-shadow: 0 4px 12px rgba(0,0,0,.35); }
+.tbtns button { background: radial-gradient(circle at 50% 28%, rgba(44,76,102,.88), rgba(6,18,28,.84) 72%); box-shadow: inset 0 0 0 2px rgba(255,255,255,.05), 0 4px 12px rgba(0,0,0,.35); transition: background .15s, color .15s, border-color .15s, transform .08s; }
+.tbtns button[data-b="shoot"] { background: radial-gradient(circle at 50% 28%, rgba(255,214,110,.5), rgba(118,78,4,.55) 76%); box-shadow: 0 0 0 3px rgba(255,194,58,.16), 0 6px 16px rgba(0,0,0,.4); }
+.tbtns.def button[data-b="shoot"] { background: radial-gradient(circle at 50% 28%, rgba(120,210,255,.45), rgba(8,58,94,.6) 76%); box-shadow: 0 0 0 3px rgba(88,198,255,.16), 0 6px 16px rgba(0,0,0,.4); }
+.tbtns button.on, .tbtns button[data-b="shoot"].on { background: var(--accent); color: #1a1204; transform: scale(.93); }
+#banner.goal .b-title { position: relative; overflow: hidden; background: linear-gradient(100deg, #ffd65e, #ffae00); transform: skewX(-8deg); padding: 10px 30px 9px; box-shadow: 0 10px 30px rgba(255,170,0,.35); }
+#banner.goal .b-title::after { content: ""; position: absolute; top: 0; bottom: 0; left: -60%; width: 45%; background: linear-gradient(90deg, transparent, rgba(255,255,255,.7), transparent); animation: sweep 1s ease .2s 2; }
+#banner.show.goal .b-title { animation: goalPop .5s cubic-bezier(.2,1.5,.4,1); }
+@keyframes sweep { to { left: 120%; } }
+@keyframes goalPop { from { transform: skewX(-8deg) scale(.55); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { #feed .ln { animation: none; } #banner { transition: none; } #banner.goal .b-title, #banner.goal .b-title::after, .logo-ball, .cover, .setup { animation: none !important; } }
 </style>
 
 <div id="app">
@@ -569,11 +645,43 @@ body.lefty.tb-large #stick { transform-origin: bottom right; }
     </div>
   </div>
 
-  <div id="menu" class="overlay menu">
-    <div class="menu-panel">
-      <div class="eyebrow">Водное поло · правила World Aquatics 2025/26</div>
-      <h1 class="title">WATER POLO<span>MOBILE</span></h1>
-      <p class="lede">Сборные Парижа-2024, Казахстан и клубы «Астана 1» и «Астана 2». Поле 25 метров, 28 секунд на атаку, удаление на 15 секунд, пенальти с 5 метров, спринт в начале каждого периода.</p>
+  <div id="menu" class="overlay menu" data-view="home">
+    <section class="cover" aria-label="Главное меню">
+      <header class="home-brand">
+        <svg class="logo-ball" viewBox="0 0 64 64" aria-hidden="true">
+          <defs>
+            <radialGradient id="lbG" cx="36%" cy="30%" r="72%"><stop offset="0" stop-color="#fff6c4"/><stop offset=".5" stop-color="#ffc23a"/><stop offset="1" stop-color="#c97800"/></radialGradient>
+            <clipPath id="lbC"><circle cx="32" cy="29" r="21"/></clipPath>
+          </defs>
+          <circle cx="32" cy="29" r="21" fill="url(#lbG)"/>
+          <g clip-path="url(#lbC)" fill="none" stroke="#1f55e0" stroke-width="3.4" stroke-linecap="round"><path d="M9 19c12 7 34 7 46 0"/><path d="M8 36c14 8 34 8 48 0"/><path d="M33 6c-9 9-9 37 0 46"/></g>
+          <path d="M5 55c5-4 9-4 14 0s9 4 14 0 9-4 14 0 8 4 12 1" fill="none" stroke="#3dd6f5" stroke-width="3.2" stroke-linecap="round"/>
+        </svg>
+        <div>
+          <div class="eyebrow">Водное поло · правила World Aquatics 2025/26</div>
+          <h1 class="title">WATER POLO<span>MOBILE</span></h1>
+        </div>
+      </header>
+      <button class="hero" id="btnPlay">
+        <span class="hero-tag" id="hvTag">Матч против ИИ</span>
+        <span class="hero-vs">
+          <span class="hv-team" id="hvH"><i class="hv-flag"></i><b></b><small></small></span>
+          <em>VS</em>
+          <span class="hv-team" id="hvA"><i class="hv-flag"></i><b></b><small></small></span>
+        </span>
+        <span class="hero-foot"><span class="hero-meta" id="hvMeta"></span><span class="hero-go">Играть<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5l11 7-11 7z"/></svg></span></span>
+      </button>
+      <button class="setup-link" id="btnSetup">Сменить команды и настройки <span aria-hidden="true">›</span></button>
+      <div class="tiles">
+        <button class="tile t-online" id="btnOnline"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.2"/><circle cx="17.5" cy="9" r="2.6"/><path d="M2.5 20c0-3.6 2.9-5.6 6.5-5.6s6.5 2 6.5 5.6M14.5 14.8c3.6-.6 7 .9 7 5"/></svg><b>Онлайн</b><small id="onBadge">Игра с людьми</small></button>
+        <button class="tile" id="btnCareer"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3.5h8v5.5a4 4 0 0 1-8 0zM8 5.5H4.5a3.5 3.5 0 0 0 3.6 4.6M16 5.5h3.5a3.5 3.5 0 0 1-3.6 4.6M12 13v4.5M7.5 20.5h9"/></svg><b>Карьера</b><small>Тренер или игрок</small></button>
+        <button class="tile" id="btnTut"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 5h6a2.5 2.5 0 0 1 2.5 2.5V20a2 2 0 0 0-2-2H3.5zM20.5 5h-6A2.5 2.5 0 0 0 12 7.5V20a2 2 0 0 1 2-2h6.5z"/></svg><b>Обучение</b><small>Удары, пасы, защита</small></button>
+        <button class="tile" id="btnCtlSet"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="7" width="20" height="11" rx="5.5"/><path d="M7 10.5v4M5 12.5h4"/><circle cx="16" cy="11" r="1.1"/><circle cx="18.2" cy="13.8" r="1.1"/></svg><b>Управление</b><small>Кнопки и клавиши</small></button>
+      </div>
+      <footer class="home-foot"><button id="btnRules">Правила</button><button id="btnCtl">Схема управления</button><span>25×20 м · 28 с атака · 15 с удаление</span></footer>
+    </section>
+    <div class="menu-panel setup">
+      <div class="setup-head"><button class="back-btn" id="btnBack" aria-label="Назад"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button><h2>Настройка матча</h2></div>
       <div class="teams">
         <div class="team-pick" data-side="0">
           <div class="tp-side"><span class="capdot home"></span>Хозяева · белые шапочки</div>
@@ -597,9 +705,7 @@ body.lefty.tb-large #stick { transform-origin: bottom right; }
         <div class="opt"><span>При ничьей</span><div class="seg" id="optTie"><button data-v="1">Серия пенальти</button><button data-v="0">Ничья</button></div></div>
         <div class="opt"><span>Графика</span><div class="seg" id="optGfx"><button data-v="auto">Авто</button><button data-v="high">Высокая</button><button data-v="low">Экономия</button></div></div>
       </div>
-      <div class="cta-row"><button class="cta" id="btnStart">На воду</button><button class="cta ghost" id="btnCareer">Карьера</button><button class="cta ghost" id="btnTut">Обучение</button><button class="cta ghost" id="btnOnline">Онлайн</button></div>
-      <div class="links"><button id="btnRules">Правила</button><button id="btnCtl">Управление</button><button id="btnCtlSet">Настройка управления</button></div>
-      <div class="facts"><span><b>25×20</b>м поле</span><span><b>28/18</b>с атака</span><span><b>15</b>с удаление</span><span><b>5</b>м пенальти</span><span><b>4×8</b>мин</span></div>
+      <div class="cta-row"><button class="cta" id="btnStart">На воду</button></div>
     </div>
   </div>
 
@@ -685,19 +791,19 @@ body.lefty.tb-large #stick { transform-origin: bottom right; }
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.min.js"></script>
-<script src="js/data.js?v=1791046244"></script>
-<script src="js/audio.js?v=1791046244"></script>
-<script src="js/world.js?v=1791046244"></script>
-<script src="js/player.js?v=1791046244"></script>
-<script src="js/ball.js?v=1791046244"></script>
-<script src="js/ai.js?v=1791046244"></script>
-<script src="js/match.js?v=1791046244"></script>
-<script src="js/input.js?v=1791046244"></script>
-<script src="js/career.js?v=1791046244"></script>
-<script src="js/tutorial.js?v=1791046244"></script>
-<script src="js/firebase-config.js?v=1791046244"></script>
-<script src="js/net.js?v=1791046244"></script>
-<script src="js/ui.js?v=1791046244"></script>
-<script src="js/main.js?v=1791046244"></script>
+<script src="js/data.js?v=1791130661"></script>
+<script src="js/audio.js?v=1791130661"></script>
+<script src="js/world.js?v=1791130661"></script>
+<script src="js/player.js?v=1791130661"></script>
+<script src="js/ball.js?v=1791130661"></script>
+<script src="js/ai.js?v=1791130661"></script>
+<script src="js/match.js?v=1791130661"></script>
+<script src="js/input.js?v=1791130661"></script>
+<script src="js/career.js?v=1791130661"></script>
+<script src="js/tutorial.js?v=1791130661"></script>
+<script src="js/firebase-config.js?v=1791130661"></script>
+<script src="js/net.js?v=1791130661"></script>
+<script src="js/ui.js?v=1791130661"></script>
+<script src="js/main.js?v=1791130661"></script>
 
 </body></html>

@@ -324,7 +324,7 @@
         m.state = 'live'; m.restart = null; m.so = null; m.clock = 400; m.shotClock = 20; m.possession = att; m.shotReset = null;
         att.dir = 1; def.dir = -1;
         for (const p of m.all()) { p.x = -9 + Math.random() * 2; p.z = (Math.random() - 0.5) * 16; p.vx = p.vz = 0; p.action = null; p.excluded = false; p.outForGame = false; p.hasBall = false; p.save = null; p.gkHandActive = false; p.stealCD = 5; p.catchCD = 0; }
-        const gk = def.gk; gk.x = WP.R.HALF_L - 0.7; gk.z = zOff * 0.1; gk.lift = 0.7; gk.biteT = 0; gk.liftTarget = 0.7;
+        const gk = def.gk; gk.x = WP.R.HALF_L - 0.7; gk.z = zOff * 0.1; gk.lift = 0.7; gk.biteT = 0; gk.liftTarget = 0.7; gk.unset = 0; gk.gkAng = undefined;
         const s = att.players.find(p => !p.isGK); s.x = WP.R.HALF_L - dist; s.z = zOff; s.heading = Math.atan2(-zOff, dist); s.lift = 0.2;
         m.ball.attach(s); s.holdMode = 'hold'; s.decideT = 99;
         const side = Math.random() < 0.5 ? -1 : 1;
@@ -340,6 +340,45 @@
         else if (f && (f.touched || m.ball.holder === gk || m.ball.lastTouch === gk)) res.save++;
         else res.miss++;
       }
+      return res;
+    },
+    // Стенд перепаса: резкий пас поперёк ворот на дистанции dist и бросок через wait с после приёма → исходы
+    xpass(n, dist, wait, kind) {
+      const m = match, res = { goal: 0, save: 0, miss: 0, lag: 0 };
+      const att = m.teams[0], def = m.teams[1];
+      for (let i = 0; i < n; i++) {
+        m.state = 'live'; m.restart = null; m.so = null; m.clock = 400; m.shotClock = 20; m.possession = att; m.shotReset = null;
+        att.dir = 1; def.dir = -1;
+        for (const p of m.all()) { p.x = -9 + Math.random() * 2; p.z = (Math.random() - 0.5) * 16; p.vx = p.vz = 0; p.action = null; p.excluded = false; p.outForGame = false; p.hasBall = false; p.save = null; p.gkHandActive = false; p.stealCD = 5; p.catchCD = 0; p.decideT = 99; }
+        const fs = att.players.filter(p => !p.isGK), a = fs[0], b = fs[1], side = Math.random() < 0.5 ? -1 : 1;
+        a.x = WP.R.HALF_L - dist; a.z = 2.4 * side; b.x = WP.R.HALF_L - dist; b.z = -2.4 * side;
+        a.heading = Math.atan2(-a.z, dist); b.heading = Math.atan2(-b.z, dist);
+        const gk = def.gk, gi = WP.AI.gkIdeal(def, a.x, a.z, false);
+        gk.x = gi.x; gk.z = gi.z; gk.lift = 0.72; gk.biteT = 0; gk.unset = 0; gk.gkAng = undefined;
+        m.ball.attach(a); a.holdMode = 'hold';
+        for (let k = 0; k < 60; k++) { m.step(STEP); att.ai.phaseT = 99; }
+        gk.unset = 0; b.xpTry = false;
+        m.doPass(a, b, { power: 0.75 });
+        let caught = -1, shot = false, f = null, lag = 0;
+        for (let k = 0; k < 900; k++) {
+          m.step(STEP);
+          b.decideT = 99; a.decideT = 99; att.ai.phaseT = 99; b.xpTry = false;
+          if (caught < 0 && m.ball.holder === b) caught = m.t;
+          if (caught >= 0 && !shot && m.t - caught >= wait && (!b.action || b.action.type === 'catch')) {
+            b.action = null; shot = true;
+            const sd = gk.vz > 0.2 ? -1 : gk.vz < -0.2 ? 1 : (gk.z > b.z * 0.12 ? -1 : 1);
+            m.startShot(b, { type: kind || 'power', ai: true, quick: wait < 0.3, zAim: sd * (1.0 + Math.random() * 0.32), yAim: Math.random() < 0.62 ? 0.62 + Math.random() * 0.18 : 0.15 + Math.random() * 0.17, power: 0.72 + Math.random() * 0.28 });
+          }
+          if (!f && m.ball.flight && m.ball.flight.type === 'shot') { f = m.ball.flight; lag += gk.save ? gk.save.lag || 0 : 0; }
+          if (caught < 0 && m.ball.holder && m.ball.holder !== a) break;
+          if (m.state !== 'live' || m.ball.holder === gk || (f && m.ball.state === 'free' && m.t - m.ball.releaseT > 2.2)) break;
+        }
+        res.lag += lag;
+        if (m.state === 'goal') { res.goal++; att.score--; }
+        else if (f && (f.touched || m.ball.holder === gk || m.ball.lastTouch === gk)) res.save++;
+        else res.miss++;
+      }
+      res.lag = +(res.lag / n).toFixed(2);
       return res;
     },
   };

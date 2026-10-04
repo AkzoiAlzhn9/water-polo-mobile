@@ -568,8 +568,8 @@
       }
       opts.style = style;
       let dur = 99;
-      if (opts.ai) dur = style === 'flick' ? rnd(0.12, 0.18) : rnd(0.3, 0.46) * (style === 'back' ? 0.55 : opts.type === 'lob' ? 0.8 : style === 'side' ? 0.85 : 1);
-      p.action = { type: 'windup', t: 0, dur, ai: !!opts.ai, opts };
+      if (opts.ai) dur = style === 'flick' ? rnd(0.12, 0.18) : rnd(0.3, 0.46) * (style === 'back' ? 0.55 : opts.type === 'lob' ? 0.8 : style === 'side' ? 0.85 : 1) * (opts.quick ? 0.6 : 1);
+      p.action = { type: 'windup', t: 0, dur, ai: !!opts.ai, opts, t0: this.t };
       if (style !== 'flick') {
         p.holdMode = 'hold';
         // Выпрыгивание из воды перед броском: брызги, волна, пена
@@ -601,6 +601,7 @@
       if (style === 'flick') sig += 0.05;
       if (style === 'side') sig += 0.03;
       if (opts.type === 'lob') sig *= 0.7;
+      if (opts.type === 'skip') sig *= 0.85;
       // С дальней дистанции точность падает сильнее (раньше ошибка переставала расти после 12 м)
       sig *= clamp(dist / 6, 0.75, opts.type === 'lob' ? 3.4 : 2.6) * (team.ai.errMul || 1);
       if (p.ctrl) sig *= 0.92;
@@ -612,12 +613,17 @@
       if (opts.type === 'lob') {
         vel = WP.solveLob(from, new THREE.Vector3(gx - team.dir * 0.1, clamp(y + 0.05, 0.72, 0.82), z * 0.92), 2.5 + dist * 0.12);
       } else if (opts.type === 'skip') {
-        vel = WP.solveThrow(from, new THREE.Vector3(gx - team.dir * rnd(1.0, 1.7), 0.0, z * 0.88), (13 + 9 * power) * shp, false);
+        // Мяч должен войти в воду полого (~1:4), иначе он не отскочит, а «утонет»: с близи — бросок ниже, точка отскока ближе к воротам
+        from.y = Math.min(from.y, clamp(0.3 + dist * 0.07, 0.42, 0.8));
+        const back = clamp(dist - from.y / 0.27, 0.7, 2.4) + rnd(-0.15, 0.15);
+        // Точка отскока лежит на прямой от мяча к выбранному углу ворот — после отскока мяч летит туда же
+        const bx = gx - team.dir * back, k = (bx - from.x) / ((gx - from.x) || 1e-6);
+        vel = WP.solveThrow(from, new THREE.Vector3(bx, 0.0, from.z + (z * 0.95 - from.z) * k), (13 + 9 * power) * shp, false);
       } else {
         const sm = opts.type === 'turn' ? 0.72 : style === 'flick' ? 0.74 : style === 'side' ? 0.94 : 1;
         vel = WP.solveThrow(from, new THREE.Vector3(gx + team.dir * 0.2, y, z), (12.5 + 11 * power) * shp * sm, false);
       }
-      const onTarget = this.predictOnTarget(from, vel, team);
+      const onTarget = this.predictOnTarget(from, vel, team, opts.type === 'skip');
       let screened = false;
       const sx = gx - p.x, sz = -p.z, L = Math.hypot(sx, sz);
       for (const o of this.all()) {
@@ -632,7 +638,8 @@
       this.ball.releaseT = this.t;
       p.action = { type: 'release', t: 0, dur: style === 'over' ? 0.42 : 0.3, style };
       p.pumpN = 0;
-      this.emit('shotspeed', { kmh, p });
+      const gk0 = opp.gk, lagNow = gk0 && gk0.active && !(rs && rs.type === 'penalty') ? (gk0.unset || 0) : 0;
+      this.emit('shotspeed', { kmh, p, tag: lagNow > 0.45 ? 'с ходу — вратарь не успел' : opts.type === 'skip' ? 'от воды' : '' });
       p.holdMode = 'hold';
       if (style === 'flick') this.world.splash(from.x, 0.08, from.z, 8, 0.8, vel.clone().normalize());
       team.stats.shots++; p.stats.shots++;
@@ -643,14 +650,14 @@
       WP.Audio.whoosh();
     }
 
-    predictOnTarget(from, vel, team) {
+    predictOnTarget(from, vel, team, sk) {
       const gx = team.dir * R.HALF_L;
       const p = from.clone(), v = vel.clone();
       for (let i = 0; i < 600; i++) {
         const h = 1 / 240, sp = v.length();
         v.x -= R.DRAG * sp * v.x * h; v.z -= R.DRAG * sp * v.z * h; v.y -= (R.DRAG * sp * v.y + R.G) * h;
         p.addScaledVector(v, h);
-        if (p.y < 0.07 && v.y < 0) { const vh = Math.hypot(v.x, v.z); if (vh > 7 && -v.y < vh * 0.42) { v.y = -v.y * 0.48; v.x *= 0.8; v.z *= 0.8; p.y = 0.08; } else return false; }
+        if (p.y < 0.07 && v.y < 0) { if (WP.waterBounce(v, sk)) { sk = false; p.y = 0.08; } else return false; }
         if ((p.x - gx) * team.dir >= 0) return Math.abs(p.z) < R.GOAL_HALF_W && p.y < R.GOAL_H;
       }
       return false;
@@ -901,7 +908,7 @@
       const b = this.ball, f = b.flight;
       if (f && f.type === 'shot' && p.isGK && p.team !== f.team && f.onTarget && !f.saveCounted && !this.so) this.countSave(p, f);
       if (f && f.type === 'pass' && f.team === p.team && f.from !== p) { p.lastPassFrom = f.from; p.lastPassT = this.t; }
-      p.gainT = this.t;
+      p.gainT = this.t; p.gainHow = how; p.xpTry = undefined;
       b.attach(p);
       p.holdT = 0; p.decideT = p.team.ai.decision * rnd(0.4, 0.9);
       p.holdMode = p.speed > 0.95 ? 'dribble' : 'hold';
@@ -1014,7 +1021,7 @@
         if (p.hasBall) {
           const canAct = this.state === 'live' || (rs && rs.ready && rs.taker === p);
           // Первые 0,35 с после отбора или приёма броски не срабатывают: нажатия комбо не должны превращаться в бросок
-          const fresh = this.t - (p.gainT === undefined ? -9 : p.gainT) < 0.35;
+          const fresh = this.t - (p.gainT === undefined ? -9 : p.gainT) < (p.gainHow === 'catch' ? 0.1 : 0.35);
           // Буфер: бросок, нажатый во время кача или приёма, срабатывает сразу после них
           if (inp.shootP && p.action && ['fake', 'catch', 'drawfoul', 'release'].includes(p.action.type)) p.shootBuf = this.t;
           const buffered = p.shootBuf && this.t - p.shootBuf < 0.45 && inp.shootD;
@@ -1078,8 +1085,9 @@
             if (!held && !a.letGo) { a.letGo = true; a.power = clamp((a.t - 0.05) / 0.65, WP.Input.opts.autoPower ? 0.85 : 0.3, 1); }
             // Свайп по кнопке броска: вверх — парашют, вниз — с отскоком
             if (!held && inp.shootGest && !a.gest) a.gest = inp.shootGest;
-            // Полный замах занимает не меньше 0,24 с, даже если кнопку просто тапнули
-            if (a.letGo && a.t >= 0.24) {
+            // Полный замах занимает не меньше 0,24 с, даже если кнопку просто тапнули; бросок с ходу после паса — 0,15 с
+            const quick = p.gainHow === 'catch' && a.t0 !== undefined && a.t0 - p.gainT < 0.6;
+            if (a.letGo && a.t >= (quick ? 0.15 : 0.24)) {
               const type = a.gest === 'up' ? 'lob' : a.gest === 'down' ? 'skip' : a.opts.type;
               this.releaseShot(p, a, { type, power: type === 'lob' ? 0.6 : a.power, zAim: this.humanAim(p, inp) * (type === 'lob' ? 0.9 : 1), yAim: type === 'skip' ? 0 : type === 'lob' ? 0.78 : this.humanHeight(p) });
             }
@@ -1471,7 +1479,8 @@
           return;
         }
         case 'skip':
-          this.world.splash(ball.pos.x, 0.05, ball.pos.z, 14, 1.1, ball.vel.clone().normalize());
+          WP.Audio.slap();
+          this.world.splash(ball.pos.x, 0.05, ball.pos.z, 18, 1.25, ball.vel.clone().normalize());
           this.world.addRipple(ball.pos.x, ball.pos.z, 0.05);
           this.world.foam(ball.pos.x, ball.pos.z, 0.6, 0.9);
           WP.Audio.splash(0.7);

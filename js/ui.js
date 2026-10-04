@@ -31,7 +31,7 @@ WP.UI = (function () {
         const n = WP.TEAMS.length, d = +b.dataset.d;
         let v = (cfg[key] + d + n) % n;
         if (v === cfg[other]) v = (v + d + n) % n;
-        cfg[key] = v; store.set(key, v); renderPicks();
+        cfg[key] = v; store.set(key, v); renderPicks(); renderHero();
       }));
     });
     bindSeg('optMode', 'mode', (v) => v);
@@ -42,6 +42,10 @@ WP.UI = (function () {
     bindSeg('optGfx', 'gfx', (v) => v);
     $('optGfx').addEventListener('click', () => { if (cb.gfx) cb.gfx(cfg.gfx); });
     renderPicks(); renderSegs();
+    // Обложка: «Играть» — матч с текущими настройками, «Сменить команды» — экран настройки
+    $('btnPlay').addEventListener('click', () => $('btnStart').click());
+    $('btnSetup').addEventListener('click', () => { $('menu').dataset.view = 'setup'; });
+    $('btnBack').addEventListener('click', () => { $('menu').dataset.view = 'home'; });
     $('btnStart').addEventListener('click', () => {
       WP.Audio.init();
       cb.start({
@@ -136,6 +140,16 @@ WP.UI = (function () {
     $('rowSide').hidden = cfg.mode !== '1p';
     $('rowDiff').hidden = cfg.mode !== '1p';
     $('btnStart').textContent = cfg.mode === 'demo' ? 'Смотреть матч' : 'На воду';
+    renderHero();
+  }
+  // Карточка матча на обложке
+  function renderHero() {
+    const set = (id, t) => { const el = $(id); el.querySelector('.hv-flag').innerHTML = WP.flag(t.code); el.querySelector('b').textContent = t.code; el.querySelector('small').textContent = t.name; };
+    set('hvH', WP.TEAMS[cfg.home]); set('hvA', WP.TEAMS[cfg.away]);
+    const DIFF = ['любитель', 'профи', 'мировой класс'];
+    $('hvTag').textContent = cfg.mode === '2p' ? 'Матч вдвоём' : cfg.mode === 'demo' ? 'Смотреть матч ИИ' : 'Матч против ИИ';
+    $('hvMeta').textContent = '4 × ' + cfg.len + ' мин' + (cfg.mode === '1p' ? ' · ' + DIFF[cfg.diff] + ' · за ' + (cfg.side ? 'гостей' : 'хозяев') : '');
+    $('btnPlay').querySelector('.hero-go').firstChild.textContent = cfg.mode === 'demo' ? 'Смотреть' : 'Играть';
   }
   function renderPicks() {
     document.querySelectorAll('.team-pick').forEach((el) => {
@@ -168,7 +182,7 @@ WP.UI = (function () {
   }
 
   function showMenu(on) {
-    if (on) document.body.classList.remove('playing');
+    if (on) { document.body.classList.remove('playing'); $('menu').dataset.view = 'home'; }
     $('menu').hidden = !on;
     $('hud').hidden = on;
     $('touch').hidden = on || !isTouch;
@@ -283,8 +297,8 @@ WP.UI = (function () {
     }
     if (kind === 'shotspeed') {
       const el = $('speed');
-      el.innerHTML = 'Бросок · <b>' + d.kmh + '</b> км/ч · ' + d.p.name;
-      el.className = 'show';
+      el.innerHTML = 'Бросок' + (d.tag ? ' ' + d.tag : '') + ' · <b>' + d.kmh + '</b> км/ч · ' + d.p.name;
+      el.className = 'show' + (d.tag && d.tag.startsWith('с ходу') ? ' ok' : '');
       clearTimeout(speedTimer); speedTimer = setTimeout(() => { el.className = ''; }, 2600);
       return;
     }
@@ -557,6 +571,7 @@ WP.UI = (function () {
     const showShot = m.possession && !m.so && !['break', 'final', 'intro', 'sprint'].includes(m.state) && m.shotClock < m.clock + 0.5;
     const sc = Math.max(0, Math.ceil(m.shotClock));
     $('sbShot').textContent = showShot ? sc : '';
+    $('sbShotBox').classList.toggle('empty', !showShot);
     $('sbShotBox').classList.toggle('low', !!showShot && sc <= 5);
     const pills = [];
     for (const t of m.teams) for (const p of t.players) if (p.excluded) {

@@ -516,6 +516,12 @@
       const x0 = AI.xg(match, p);
       if (x0 > 0.12) { ai.play = null; AI.shoot(match, p); return; }
     }
+    // Перепас: поймал мяч у ворот, а вратарь ещё не успел сместиться — бросок сразу, с короткого замаха
+    const og = team.opp.gk;
+    if (canShoot && !rs && !AI.quickOff && p.xpTry === undefined && p.holdT > 0.08 && p.gainHow === 'catch' && p.lastPassT === p.gainT && og && og.active && (og.unset || 0) > 0.65 && AI.goalDist(team, p.x, p.z) < 6.5) {
+      p.xpTry = Math.random() < 0.25;
+      if (p.xpTry && AI.xg(match, p) > 0.15) { AI.shoot(match, p, { quick: true }); return; }
+    }
     // Время атаки на исходе — бросать
     if (canShoot && sc < 3.2 && p.holdT > 0.15 && AI.goalDist(team, p.x, p.z) < 13) { AI.shoot(match, p); return; }
     if (p.decideT > 0) return;
@@ -543,15 +549,18 @@
     if (canShoot && xg > 0.12 && Math.random() < 0.035 * ai.fakes) match.doFake(p);
   };
 
-  AI.shoot = function (match, p) {
+  AI.shoot = function (match, p, o) {
     const team = p.team, opp = team.opp, gk = opp.gk;
     const lineD = AI.lineD(team, p.x);
     const gkz = gk && gk.active ? gk.z : 0;
     let side = gkz > p.z * 0.12 ? -1 : 1;
     if (Math.random() < 0.22) side = -side;
+    // После перепаса — в угол, из которого вратарь уплывает
+    const quick = !!(o && o.quick);
+    if (quick && gk && Math.abs(gk.vz) > 0.2) side = gk.vz > 0 ? -1 : 1;
     const zAim = side * rnd(1.0, 1.32);
     // Вратарь купился на кач и опускается — бросок в верхний угол
-    const yAim = gk && gk.biteT > 0 ? rnd(0.66, 0.8) : Math.random() < 0.62 ? rnd(0.62, 0.8) : rnd(0.15, 0.32);
+    let yAim = gk && gk.biteT > 0 ? rnd(0.66, 0.8) : Math.random() < 0.62 ? rnd(0.62, 0.8) : rnd(0.15, 0.32);
     const goalAng = Math.atan2(-p.z, team.dir * R.HALF_L - p.x);
     const facing = Math.abs(WP.angNorm(goalAng - p.heading));
     let type = 'power';
@@ -563,12 +572,23 @@
     const dist = AI.goalDist(team, p.x, p.z);
     const key = 'shot:' + (dist < 4 ? '<4' : dist < 6 ? '4-6' : dist < 8 ? '6-8' : dist < 10 ? '8-10' : '10+') + (match.shotClock < 3 ? ':urg' : '');
     match.dbg[key] = (match.dbg[key] || 0) + 1;
-    match.startShot(p, { type, zAim, yAim, power, ai: true });
+    if (quick && type === 'power' && Math.random() < 0.55) yAim = rnd(0.62, 0.8);
+    match.startShot(p, { type, zAim, yAim, power, ai: true, quick });
   };
 
   // Вратарь
   AI.gkUpdate = function (match, gk, dt) {
     const team = gk.team, ball = match.ball;
+    // Перепас: мяч резко ушёл поперёк ворот — вратарю надо переплыть и снова выпрыгнуть из воды.
+    // Пока он «не встал» (unset 0…1), реакция медленнее и до верхних углов не достать; за ~1 с приходит в себя
+    {
+      const gx = -team.dir * R.HALF_L, dxb = Math.max(0.6, (ball.pos.x - gx) * team.dir), ang = Math.atan2(ball.pos.z, dxb);
+      const near = match.state === 'live' && !ball.holder ? clamp((10 - dxb) / 4, 0, 1) : 0; // считаем только мяч в полёте (пас, отскок)
+      // Не больше 0,06 рад за шаг: быстрый пас — это ~0,03, а мгновенный перенос мяча (расстановка) не в счёт
+      const jump = gk.gkAng === undefined ? 0 : Math.min(0.06, Math.abs(ang - gk.gkAng));
+      gk.unset = clamp((gk.unset || 0) + jump * 1.8 * near - dt * (0.55 + 0.3 * gk.attrs.gk / 100), 0, 1);
+      gk.gkAng = ang;
+    }
     if (gk.biteT > 0) {
       gk.biteT -= dt;
       // Прыжок на кач: первые 0,3 с вратарь выпрыгивает, потом проседает в воду и не успевает подняться
@@ -587,6 +607,8 @@
     const car = ball.holder;
     if (car && car.team !== team && AI.goalDist(car.team, car.x, car.z) < 10) gk.liftTarget = car.action && car.action.type === 'windup' ? 1.0 : 0.72;
     else gk.liftTarget = 0.42;
+    // Смещаясь боком, высоко не выпрыгнешь
+    gk.liftTarget *= 1 - 0.35 * (gk.unset || 0);
   };
 
   // Сейв: реакция, прогноз точки, выпад
@@ -596,18 +618,29 @@
     gk.save = {
       t: 0,
       react: 0.12 + 0.12 * (1 - a / 100) + Math.random() * 0.06 + (info.screened ? 0.06 : 0) + (gk.biteT > 0 ? 0.35 : 0) + (info.penalty ? -0.02 : 0),
-      pred: null, z0: gk.z, lob: info.kind === 'lob', maxY: info.kind === 'lob' ? 1.12 : 1.3, hs: WP.GKT.hs0 + WP.GKT.hs1 * a / 100, ls: WP.GKT.ls0 + WP.GKT.ls1 * a / 100, err: WP.GKT.err0 + 0.22 * (1 - a / 100) + (info.kind === 'skip' ? 0.08 : 0),
+      pred: null, z0: gk.z, lob: info.kind === 'lob', maxY: info.kind === 'lob' ? 1.12 : 1.3, hs: WP.GKT.hs0 + WP.GKT.hs1 * a / 100, ls: WP.GKT.ls0 + WP.GKT.ls1 * a / 100, err: WP.GKT.err0 + 0.22 * (1 - a / 100) + (info.kind === 'skip' ? 0.07 : 0),
     };
     // Купился на кач: вратарь уже выпрыгнул и опускается — руки медленнее, до верхних углов не достать
     if (gk.biteT > 0) { gk.save.hs *= 0.7; gk.save.ls *= 0.7; }
+    // Бросок сразу после перепаса: вратарь ещё плывёт за мячом и не успел выпрыгнуть
+    const lag = info.penalty ? 0 : clamp(gk.unset || 0, 0, 1);
+    if (lag > 0.05) {
+      gk.save.react += 0.3 * lag;
+      gk.save.ls *= 1 - 0.55 * lag; gk.save.hs *= 1 - 0.3 * lag;
+      gk.save.err += 0.2 * lag;
+      gk.save.maxY = Math.min(gk.save.maxY, 1.3 - 0.55 * lag);
+    }
+    gk.save.lag = lag;
     gk.gkHandActive = true;
     gk.gkHand.set(gk.x + dir * 0.12, 0.62 + gk.lift * 0.4, gk.z);
+    // Бросок «от воды» видно по замаху — руку сразу опускает к воде
+    if (info.kind === 'skip') gk.gkHand.y = Math.min(gk.gkHand.y, 0.62);
     // «Парашют» с близкой дистанции часто застаёт вратаря выпрыгнувшим навстречу; издалека он успевает понять
     const sd = info.shooter ? AI.goalDist(info.shooter.team, info.shooter.x, info.shooter.z) : 6;
     if (info.kind === 'lob' && sd < 9 && Math.random() < 0.6 - (a - 80) / 100) gk.save.react += 0.25;
     gk.save.far = sd;
     // Чтение броска: хороший вратарь заранее смещает руку в сторону угла, иногда ошибается
-    if (info.aimZ !== undefined && gk.biteT <= 0) {
+    if (info.aimZ !== undefined && gk.biteT <= 0 && lag < 0.3) {
       const sk = info.shooter ? (info.shooter.attrs.sht + info.shooter.attrs.acc) / 2 : 85;
       const pRead = clamp(0.25 + 0.45 * (a - 70) / 30 - (sk - 80) / 200 - (info.screened ? 0.15 : 0), 0.12, 0.72);
       const r = Math.random();
@@ -642,13 +675,13 @@
     if (!s.pred) {
       const planeX = gk.x + dir * 0.1;
       const p = ball.pos.clone(), v = ball.vel.clone();
-      let found = null;
+      let found = null, sk = !!(ball.flight && ball.flight.kind === 'skip' && !ball.flight.skipped);
       for (let i = 0; i < 360; i++) {
         const h = 1 / 240, sp = v.length();
         v.x -= R.DRAG * sp * v.x * h; v.z -= R.DRAG * sp * v.z * h; v.y -= (R.DRAG * sp * v.y + R.G) * h;
         const px = p.x;
         p.addScaledVector(v, h);
-        if (p.y < 0.07 && v.y < 0) { const vh = Math.hypot(v.x, v.z); if (vh > 7 && -v.y < vh * 0.42) { v.y = -v.y * 0.48; v.x *= 0.8; v.z *= 0.8; p.y = 0.08; } else { p.y = 0.07; v.y = 0; v.multiplyScalar(0.45); } }
+        if (p.y < 0.07 && v.y < 0) { if (WP.waterBounce(v, sk)) { sk = false; p.y = 0.08; } else { p.y = 0.07; v.y = 0; v.multiplyScalar(0.45); } }
         if ((px - planeX) * dir > 0 && (p.x - planeX) * dir <= 0) { found = p.clone(); break; }
       }
       if (!found) found = p.clone();
