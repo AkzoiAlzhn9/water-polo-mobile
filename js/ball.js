@@ -23,9 +23,9 @@
   // Отскок от воды: мяч, вошедший в воду полого и быстро, отскакивает (бросок «от воды» — чётче и выше). true — отскочил
   WP.waterBounce = function (v, sk) {
     const vh = Math.hypot(v.x, v.z), vy = -v.y;
-    if (!(vh > 7 && vy < vh * (sk ? 0.6 : 0.42))) return false;
-    v.y = sk ? Math.max(vy * 0.62, 1.6) : vy * 0.48;
-    const f = sk ? 0.84 : 0.8;
+    if (!(vh > 7 && vy < vh * (sk ? 0.8 : 0.42))) return false;
+    v.y = sk ? Math.max(vy * 0.45, 1.4) : vy * 0.48;
+    const f = sk ? 0.9 : 0.8;
     v.x *= f; v.z *= f;
     return true;
   };
@@ -158,7 +158,7 @@
           // Бросок «от воды» отскакивает чётко и вверх (вратарь ждёт низом), чуть непредсказуемо по направлению
           const sk = this.flight && this.flight.type === 'shot' && this.flight.kind === 'skip' && !this.flight.skipped;
           if (this.inGoal === 0 && WP.waterBounce(v, sk)) {
-            v.x += (Math.random() - 0.5) * 0.3; v.z += (Math.random() - 0.5) * (sk ? 0.9 : 0.6);
+            v.x += (Math.random() - 0.5) * (sk ? 0.2 : 0.3); v.z += (Math.random() - 0.5) * (sk ? 0.3 : 0.6);
             if (sk) this.flight.skipped = true;
             p.y = floatY + 0.001;
             ev.push({ type: 'skip', speed: vh });

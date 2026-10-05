@@ -573,7 +573,7 @@
       if (style !== 'flick') {
         p.holdMode = 'hold';
         // Выпрыгивание из воды перед броском: брызги, волна, пена
-        p.liftTarget = style === 'over' ? 1.15 : 0.8;
+        p.liftTarget = opts.type === 'skip' ? 0.9 : style === 'over' ? 1.15 : 0.8;
         this.world.splash(p.x, 0.1, p.z, 10, 0.9);
         this.world.addRipple(p.x, p.z, 0.045);
         this.world.foam(p.x, p.z, 0.7, 0.8);
@@ -613,12 +613,8 @@
       if (opts.type === 'lob') {
         vel = WP.solveLob(from, new THREE.Vector3(gx - team.dir * 0.1, clamp(y + 0.05, 0.72, 0.82), z * 0.92), 2.5 + dist * 0.12);
       } else if (opts.type === 'skip') {
-        // Мяч должен войти в воду полого (~1:4), иначе он не отскочит, а «утонет»: с близи — бросок ниже, точка отскока ближе к воротам
-        from.y = Math.min(from.y, clamp(0.3 + dist * 0.07, 0.42, 0.8));
-        const back = clamp(dist - from.y / 0.27, 0.7, 2.4) + rnd(-0.15, 0.15);
-        // Точка отскока лежит на прямой от мяча к выбранному углу ворот — после отскока мяч летит туда же
-        const bx = gx - team.dir * back, k = (bx - from.x) / ((gx - from.x) || 1e-6);
-        vel = WP.solveThrow(from, new THREE.Vector3(bx, 0.0, from.z + (z * 0.95 - from.z) * k), (13 + 9 * power) * shp, false);
+        const sp = this.skipPlan(from, team, z * 0.95);
+        vel = WP.solveThrow(from, new THREE.Vector3(sp.x + team.dir * rnd(-0.12, 0.12), 0.0, sp.z), (13 + 9 * power) * shp, false);
       } else {
         const sm = opts.type === 'turn' ? 0.72 : style === 'flick' ? 0.74 : style === 'side' ? 0.94 : 1;
         vel = WP.solveThrow(from, new THREE.Vector3(gx + team.dir * 0.2, y, z), (12.5 + 11 * power) * shp * sm, false);
@@ -636,7 +632,7 @@
       const assist = p.lastPassFrom && this.t - p.lastPassT < 7 && p.lastPassFrom.team === team ? p.lastPassFrom : null;
       this.ball.release(vel, { type: 'shot', from: p, team, t: this.t, kind: opts.type, style, kmh, onTarget, assist, penalty: !!(rs && rs.type === 'penalty') });
       this.ball.releaseT = this.t;
-      p.action = { type: 'release', t: 0, dur: style === 'over' ? 0.42 : 0.3, style };
+      p.action = { type: 'release', t: 0, dur: style === 'over' ? 0.42 : 0.3, style, kind: opts.type };
       p.pumpN = 0;
       const gk0 = opp.gk, lagNow = gk0 && gk0.active && !(rs && rs.type === 'penalty') ? (gk0.unset || 0) : 0;
       this.emit('shotspeed', { kmh, p, tag: lagNow > 0.45 ? 'с ходу — вратарь не успел' : opts.type === 'skip' ? 'от воды' : '' });
@@ -648,6 +644,15 @@
       const gk = opp.gk;
       if (gk && gk.active) AI.gkSaveStart(this, gk, { screened, kind: opts.type, penalty: rs && rs.type === 'penalty', aimZ: z, aimY: opts.type === 'skip' ? 0.2 : y, shooter: p });
       WP.Audio.whoosh();
+    }
+
+    // Бросок «от воды»: куда мяч ударится о воду. Точка лежит на прямой от руки к выбранному углу ворот (после отскока мяч
+    // летит туда же), и так далеко от ворот, чтобы мяч входил в воду полого (не круче ~1:2,4) и чётко отскакивал вверх
+    skipPlan(from, team, z) {
+      const gx = team.dir * R.HALF_L, dist = Math.abs(gx - from.x);
+      const back = clamp(dist - Math.max(0.3, from.y) / 0.42, 0.5, 2.6);
+      const bx = gx - team.dir * back, k = (bx - from.x) / ((gx - from.x) || 1e-6);
+      return { x: bx, z: from.z + (z - from.z) * k, back };
     }
 
     predictOnTarget(from, vel, team, sk) {
@@ -1944,7 +1949,7 @@
         const a = p.action;
         if (a && a.type === 'windup' && !a.ai) {
           const gx = p.team.dir * R.HALF_L, z = this.humanAim(p, inp);
-          if (a.opts.type === 'skip') { mk.ret.position.set(gx - p.team.dir * 1.3, 0.06, z * 0.88); mk.ret.rotation.set(-Math.PI / 2, 0, 0); }
+          if (a.opts.type === 'skip') { const sp = this.skipPlan(p.ballHoldPos(new THREE.Vector3()), p.team, z * 0.95); mk.ret.position.set(sp.x, 0.08 + this.world.waveHeight(sp.x, sp.z), sp.z); mk.ret.rotation.set(-Math.PI / 2, 0, 0); }
           else { mk.ret.position.set(gx - p.team.dir * 0.05, 0.7, z); mk.ret.rotation.set(0, Math.PI / 2, 0); }
           const pw = clamp((a.t - 0.05) / 0.65, 0.3, 1);
           mk.ret.scale.setScalar(1.3 - pw * 0.5); mk.ret.visible = true;
