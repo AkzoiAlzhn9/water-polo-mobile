@@ -780,6 +780,8 @@
       const cam = this.camera, pos = this.camPos, look = this.camLook;
       const narrow = cam.aspect < 1;
       let tp, tl;
+      // Отладка: камера стоит, где поставили (WP.debug.cam)
+      if (this.camOverride) { cam.position.copy(this.camOverride.pos); cam.lookAt(this.camOverride.look); return; }
       if (this.camMode === 'focus' && this.focusPlayer) {
         const p = this.focusPlayer, sd = this.focusSide || 1;
         tp = new THREE.Vector3(p.x - sd * 2.6, 1.7, p.z + 3.1);

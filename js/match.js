@@ -678,7 +678,7 @@
       const pause = p.pumpN >= 1 && p.pumpGap > 0 && gap - p.pumpGap > 0.25;
       p.pumpGap = p.pumpN >= 1 ? gap : 0;
       p.pumpN = (p.pumpN || 0) + 1;
-      p.action = { type: 'fake', t: 0, dur: 0.36 };
+      p.action = { type: 'fake', t: 0, dur: 0.4 };
       p.holdMode = 'hold';
       p.lastFakeT = this.t;
       // Ноги устают: после третьего кача игрок проседает

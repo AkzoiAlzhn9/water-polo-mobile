@@ -16,7 +16,8 @@
       cap: new THREE.SphereGeometry(0.106, 24, 12, 0, TAU, 0, Math.PI * 0.56),
       ear: new THREE.SphereGeometry(0.046, 18, 8, 0, TAU, 0, Math.PI * 0.5),
       strap: new THREE.TorusGeometry(0.078, 0.005, 6, 20, Math.PI),
-      neck: new THREE.CylinderGeometry(0.052, 0.062, 0.13, 14),
+      neck: new THREE.CylinderGeometry(0.06, 0.074, 0.14, 16),
+      beard: new THREE.SphereGeometry(0.104, 20, 10, Math.PI * 0.6, Math.PI * 0.8, Math.PI * 0.6, Math.PI * 0.33),
       ball: new THREE.SphereGeometry(1, 14, 10),
       joint: new THREE.SphereGeometry(1, 12, 8),
       ring: new THREE.RingGeometry(0.42, 0.52, 40),
@@ -27,21 +28,161 @@
     return S;
   }
 
-  // Тело зависит от телосложения (ширина плеч, обхват). Профиль ватерполиста: широкие плечи и
-  // широчайшие, узкая талия («V»), мощные бёдра от эггбитера.
+  // Скульптурная поверхность: кольца по высоте ys, в каждом N точек по кругу; shape(y, a) → [x, z]
+  // (a = 0 — вперёд, +x; a = π/2 — бок, +z). Шов сваривается, чтобы нормали были гладкими.
+  function sculpt(ys, N, shape) {
+    const pos = [], uv = [], idx = [], cols = N + 1, R = ys.length;
+    for (let i = 0; i < R; i++) for (let j = 0; j <= N; j++) {
+      const a = (j % N) / N * TAU, q = shape(ys[i], a);
+      pos.push(q[0], ys[i], q[1]); uv.push(j / N, i / (R - 1));
+    }
+    for (let i = 0; i < R - 1; i++) for (let j = 0; j < N; j++) {
+      const a = i * cols + j, b = a + 1, c = a + cols, d = c + 1;
+      idx.push(a, b, c, b, d, c);
+    }
+    // Торцы: центр снизу и сверху
+    const bot = pos.length / 3; pos.push(0, ys[0], 0); uv.push(0.5, 0);
+    const top = pos.length / 3; pos.push(0, ys[R - 1], 0); uv.push(0.5, 1);
+    for (let j = 0; j < N; j++) { idx.push(bot, j + 1, j); const t0 = (R - 1) * cols; idx.push(top, t0 + j, t0 + j + 1); }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+    g.setIndex(idx);
+    g.computeVertexNormals();
+    // Нормали должны смотреть наружу (в среднем от оси); иначе разворачиваем треугольники
+    const nA = g.getAttribute('normal'), pA = g.getAttribute('position');
+    let out = 0;
+    for (let i = 0; i < pA.count; i++) out += nA.getX(i) * pA.getX(i) + nA.getZ(i) * pA.getZ(i);
+    if (out < 0) { for (let k = 0; k < idx.length; k += 3) { const t = idx[k + 1]; idx[k + 1] = idx[k + 2]; idx[k + 2] = t; } g.setIndex(idx); g.computeVertexNormals(); }
+    const n = g.getAttribute('normal');
+    for (let i = 0; i < R; i++) {
+      const a = i * cols, b = a + N;
+      const x = n.getX(a) + n.getX(b), y = n.getY(a) + n.getY(b), z = n.getZ(a) + n.getZ(b), L = Math.hypot(x, y, z) || 1;
+      n.setXYZ(a, x / L, y / L, z / L); n.setXYZ(b, x / L, y / L, z / L);
+    }
+    return g;
+  }
+  // Кусочно-линейный профиль по точкам [y, v] (y по убыванию или возрастанию)
+  function prof(pts) {
+    const P = pts.slice().sort((a, b) => a[0] - b[0]);
+    return (y) => {
+      if (y <= P[0][0]) return P[0][1];
+      for (let i = 1; i < P.length; i++) if (y <= P[i][0]) { const k = (y - P[i - 1][0]) / (P[i][0] - P[i - 1][0]); const e = k * k * (3 - 2 * k); return P[i - 1][1] + (P[i][1] - P[i - 1][1]) * e; }
+      return P[P.length - 1][1];
+    };
+  }
+  const win = (y, a, b, e) => { e = e || 0.03; const l = Math.min(1, Math.max(0, (y - a) / e)), r = Math.min(1, Math.max(0, (b - y) / e)); return Math.min(l, r); };
+  const range = (a, b, n) => { const r = []; for (let i = 0; i < n; i++) r.push(a + (b - a) * i / (n - 1)); return r; };
+
+  // Торс ватерполиста: широкие плечи и широчайшие, грудные с ложбинкой, пресс, позвоночник и лопатки, узкая талия
+  function torsoShape(bw) {
+    const W = prof([[0.12, 0.052], [0.09, 0.08], [0.065, 0.135], [0.035, 0.182], [0.0, 0.206], [-0.04, 0.208], [-0.1, 0.196], [-0.17, 0.186], [-0.25, 0.168], [-0.34, 0.15], [-0.43, 0.137], [-0.5, 0.142], [-0.56, 0.152], [-0.62, 0.146], [-0.655, 0.115], [-0.68, 0.05]]);
+    const F = prof([[0.12, 0.046], [0.09, 0.062], [0.05, 0.086], [0.0, 0.104], [-0.06, 0.122], [-0.11, 0.128], [-0.16, 0.118], [-0.22, 0.11], [-0.3, 0.106], [-0.4, 0.104], [-0.48, 0.102], [-0.56, 0.106], [-0.62, 0.098], [-0.655, 0.075], [-0.68, 0.03]]);
+    const B = prof([[0.12, 0.046], [0.09, 0.068], [0.05, 0.096], [0.0, 0.11], [-0.07, 0.116], [-0.15, 0.11], [-0.25, 0.098], [-0.36, 0.088], [-0.45, 0.086], [-0.52, 0.098], [-0.58, 0.116], [-0.63, 0.108], [-0.655, 0.08], [-0.68, 0.03]]);
+    return (y, a) => {
+      const c = Math.cos(a), sn = Math.sin(a), n = 2.5;
+      const w = W(y) * bw, d = c >= 0 ? F(y) : B(y);
+      const x = Math.sign(c) * Math.pow(Math.abs(c), 2 / n) * d, z = Math.sign(sn) * Math.pow(Math.abs(sn), 2 / n) * w;
+      const lz = z / bw;
+      let bump = 0;
+      if (c > 0) {
+        for (const zs of [-1, 1]) { const dz = (lz - zs * 0.086) / 0.068, dy = y + 0.085, sy = dy < 0 ? 0.032 : 0.065; bump += 0.019 * Math.exp(-dz * dz - (dy / sy) * (dy / sy)) * c; } // грудные
+        bump -= 0.007 * Math.exp(-(lz / 0.013) * (lz / 0.013)) * win(y, -0.22, -0.02) * c;                   // грудина
+        for (const yy of [-0.25, -0.315, -0.38]) for (const zs of [-1, 1]) { const dz = (lz - zs * 0.036) / 0.022, dy = (y - yy) / 0.023; bump += 0.0055 * Math.exp(-dz * dz - dy * dy) * c; } // пресс
+        bump -= 0.004 * Math.exp(-(lz / 0.008) * (lz / 0.008)) * win(y, -0.43, -0.22) * c;                   // белая линия
+      } else {
+        bump -= 0.007 * Math.exp(-(lz / 0.014) * (lz / 0.014)) * win(y, -0.5, 0.02) * -c;                    // позвоночник
+        for (const zs of [-1, 1]) { const dz = (lz - zs * 0.085) / 0.05, dy = (y + 0.07) / 0.06; bump += 0.009 * Math.exp(-dz * dz - dy * dy) * -c; } // лопатки
+      }
+      bump += 0.013 * Math.exp(-((y + 0.2) / 0.09) * ((y + 0.2) / 0.09)) * Math.max(0, Math.abs(sn) - 0.2) * (c < 0.3 ? 1 : 0.4); // широчайшие
+      const L = Math.hypot(x, z) || 1;
+      return [x + x / L * bump, z + z / L * bump];
+    };
+  }
+  // Рука: дельта шапкой сверху, бицепс спереди, трицепс сзади; предплечье толще у локтя
+  function upperShape(g) {
+    const R = prof([[0.065, 0.012], [0.05, 0.046], [0.025, 0.064], [-0.015, 0.066], [-0.06, 0.057], [-0.11, 0.051], [-0.17, 0.049], [-0.23, 0.045], [-0.28, 0.04], [-0.315, 0.036]]);
+    return (y, a) => {
+      const c = Math.cos(a), sn = Math.sin(a);
+      let r = R(y) * g;
+      r += 0.013 * g * Math.exp(-((y + 0.165) / 0.06) * ((y + 0.165) / 0.06)) * Math.pow(Math.max(0, c), 1.5);   // бицепс
+      r += 0.011 * g * Math.exp(-((y + 0.12) / 0.075) * ((y + 0.12) / 0.075)) * Math.pow(Math.max(0, -c), 1.2); // трицепс
+      r += 0.007 * g * win(y, -0.09, 0.035, 0.04) * Math.abs(sn);                                               // дельта сбоку
+      return [c * r, sn * r * 0.94];
+    };
+  }
+  function foreShape(g) {
+    const R = prof([[0.025, 0.02], [0.01, 0.038], [-0.03, 0.046], [-0.08, 0.044], [-0.14, 0.037], [-0.2, 0.03], [-0.25, 0.026], [-0.275, 0.024]]);
+    return (y, a) => {
+      const c = Math.cos(a), sn = Math.sin(a);
+      let r = R(y) * g;
+      r += 0.007 * g * Math.exp(-((y + 0.06) / 0.05) * ((y + 0.06) / 0.05)) * Math.max(0, c * 0.6 + sn * 0.8); // плечелучевая
+      return [c * r * 0.92, sn * r];
+    };
+  }
+
+  // Голова: череп, надбровные дуги, глазницы, нос, скулы, челюсть и подбородок (верх закрыт шапочкой)
+  const sq = (v) => v * v;
+  function headShape(off, beard) {
+    const H = 0.118, B = 0.128;
+    return (y, a) => {
+      const c = Math.cos(a), sn = Math.sin(a);
+      const t = y >= 0 ? y / H : y / B, k = Math.sqrt(Math.max(0, 1 - t * t));
+      // Челюсть сужается к подбородку, лицо чуть длиннее затылка
+      let dx = (c >= 0 ? 0.104 : 0.1) * k, dz = 0.092 * k;
+      if (y < -0.02) { const j = Math.min(1, (-0.02 - y) / 0.1); dz *= 1 - 0.28 * j; dx *= c >= 0 ? 1 + 0.06 * j : 1 - 0.25 * j; }
+      let x = c * dx, z = sn * dz;
+      const lz = z, f = Math.max(0, c);
+      let b = 0;
+      if (f > 0) {
+        b += 0.009 * Math.exp(-sq((y - 0.036) / 0.012)) * Math.exp(-sq(lz / 0.06)) * f;              // надбровье
+        for (const zs of [-1, 1]) {
+          b -= 0.009 * Math.exp(-sq((y - 0.014) / 0.014) - sq((lz - zs * 0.034) / 0.017)) * f;        // глазницы
+          b += 0.007 * Math.exp(-sq((y + 0.006) / 0.016) - sq((lz - zs * 0.058) / 0.02)) * f;          // скулы
+        }
+        b += 0.024 * Math.exp(-sq((y + 0.022) / 0.024) - sq(lz / 0.011)) * f * Math.min(1, Math.max(0, (0.03 - y) / 0.02)); // нос
+        b -= 0.003 * Math.exp(-sq((y + 0.064) / 0.008) - sq(lz / 0.026)) * f;                        // рот
+        b += 0.007 * Math.exp(-sq((y + 0.1) / 0.016) - sq(lz / 0.03)) * f;                            // подбородок
+      }
+      b += off;
+      // Борода: только низ лица и челюсть; остальное прячется внутрь головы
+      if (beard) { const on = f > 0.05 || Math.abs(sn) > 0.75 ? Math.min(1, Math.max(0, (-0.03 - y) / 0.02)) : 0; if (on <= 0) b = -0.02; else b += 0.0035 * on; if (c > 0.6 && y > -0.075 && y < -0.055 && Math.abs(lz) < 0.022) b = -0.02; }
+      const L = Math.hypot(x, z) || 1;
+      return [x + x / L * b, z + z / L * b];
+    };
+  }
+  let HEADS = null;
+  function headGeo() {
+    if (HEADS) return HEADS;
+    // Шапочка: по форме головы чуть шире; спереди кончается над бровями, по бокам закрывает уши, сзади — до затылка
+    const hs = headShape(0.006, false);
+    const cap = sculpt(range(-0.085, 0.124, 50), 34, (y, a) => {
+      a += Math.PI; // u = 0.5 — лоб (там надпись команды), u = 0 и 1 — затылок (номер)
+      const c = Math.cos(a), edge = c > 0 ? 0.047 - 0.1 * (1 - c) * (1 - c) : -0.055 - 0.03 * -c;
+      const q = hs(Math.min(y, 0.117), a);
+      if (y < Math.max(-0.08, edge)) { const L = Math.hypot(q[0], q[1]) || 1; return [q[0] - q[0] / L * 0.03, q[1] - q[1] / L * 0.03]; }
+      if (y > 0.117) { const k = Math.max(0, 1 - (y - 0.117) / 0.007); return [q[0] * k, q[1] * k]; }
+      return q;
+    });
+    // Надпись и номер — на полосе лба/затылка
+    const uv = cap.getAttribute('uv'), ps = cap.getAttribute('position');
+    for (let i = 0; i < uv.count; i++) { uv.setY(i, Math.min(1, Math.max(0, (ps.getY(i) + 0.02) / 0.14))); uv.setX(i, 1 - uv.getX(i)); }
+    HEADS = { head: sculpt(range(-0.128, 0.118, 26), 28, headShape(0, false)), beard: sculpt(range(-0.13, -0.02, 10), 28, headShape(0.002, true)), cap };
+    return HEADS;
+  }
+
+  // Тело зависит от телосложения (ширина плеч, обхват): торс и руки лепятся один раз на каждый вариант
   const GC = {};
   function bodyGeo(bw) {
     const key = bw.toFixed(2);
     if (GC[key]) return GC[key];
-    const torso = lathe([[0.02, -0.665], [0.13, -0.65], [0.165, -0.6], [0.163, -0.53], [0.145, -0.46], [0.138, -0.41], [0.146, -0.34], [0.168, -0.26], [0.192, -0.18], [0.212, -0.1], [0.224, -0.045], [0.214, 0.005], [0.182, 0.045], [0.12, 0.08], [0.055, 0.1]], 24);
-    torso.scale(0.6, 1, bw);
-    // Плавки: облегающие, чуть выше пояса — поясная резинка и боковые полосы рисуются текстурой
-    const suit = lathe([[0.02, -0.682], [0.135, -0.668], [0.172, -0.618], [0.171, -0.55], [0.152, -0.49], [0.147, -0.468]], 24);
-    suit.scale(0.63, 1, bw * 1.025);
+    const torso = sculpt(range(-0.68, 0.12, 36), 32, torsoShape(bw));
+    // Плавки: та же поверхность чуть шире, от паха до пояса; полосы по бокам — в текстуре (u = 0.25 и 0.75 — бока)
+    const tsh = torsoShape(bw);
+    const suit = sculpt(range(-0.685, -0.47, 9), 32, (y, a) => { const q = tsh(y, a), L = Math.hypot(q[0], q[1]) || 1; return [q[0] + q[0] / L * 0.004, q[1] + q[1] / L * 0.004]; });
     const g = bw;
-    // Мышцы читаются по профилю: дельта → бицепс/трицепс → локоть, предплечье сужается к запястью
-    const upper = lathe([[0.04 * g, -0.3], [0.046 * g, -0.27], [0.057 * g, -0.19], [0.062 * g, -0.12], [0.06 * g, -0.06], [0.054 * g, -0.01], [0.04 * g, 0.02]], 14);
-    const fore = lathe([[0.025 * g, -0.265], [0.029 * g, -0.22], [0.04 * g, -0.13], [0.048 * g, -0.06], [0.044 * g, -0.015], [0.036 * g, 0.012]], 14);
+    const upper = sculpt(range(-0.315, 0.065, 16), 14, upperShape(g));
+    const fore = sculpt(range(-0.275, 0.025, 12), 12, foreShape(g));
     const thigh = lathe([[0.056 * g, -0.46], [0.066 * g, -0.41], [0.087 * g, -0.28], [0.097 * g, -0.16], [0.095 * g, -0.06], [0.086 * g, 0.01]], 14);
     const shin = lathe([[0.032 * g, -0.44], [0.037 * g, -0.39], [0.05 * g, -0.27], [0.064 * g, -0.16], [0.058 * g, -0.06], [0.05 * g, 0.01]], 14);
     GC[key] = { torso, suit, upper, fore, thigh, shin };
@@ -52,7 +193,7 @@
   const MC = {};
   function skinMat(hex) {
     const k = 'skin' + hex;
-    return MC[k] || (MC[k] = WP.underwaterify(new THREE.MeshPhysicalMaterial({ color: hex, roughness: 0.42, clearcoat: 0.6, clearcoatRoughness: 0.22, sheen: 0.25, sheenRoughness: 0.6, sheenColor: new THREE.Color(0xffe2cc) })));
+    return MC[k] || (MC[k] = WP.underwaterify(new THREE.MeshPhysicalMaterial({ color: hex, roughness: 0.55, clearcoat: 0.32, clearcoatRoughness: 0.38, sheen: 0.2, sheenRoughness: 0.7, sheenColor: new THREE.Color(0xffe2cc) })));
   }
   function suitMat(team) {
     const k = 'suit' + team.code + team.suitHex + team.numHex;
@@ -63,8 +204,8 @@
       const dark = new THREE.Color(team.suitHex).multiplyScalar(0.55).getStyle();
       g.fillStyle = dark; g.fillRect(0, 0, w, h * 0.16);
       g.fillStyle = team.numHex === '#ffffff' ? '#ffffff' : '#f3f5f7';
-      for (const x of [0, w * 0.5, w]) g.fillRect(x - 7, h * 0.16, 14, h * 0.84);
-      g.fillStyle = dark; for (const x of [0, w * 0.5, w]) g.fillRect(x - 2, h * 0.16, 4, h * 0.84);
+      for (const x of [w * 0.25, w * 0.75]) g.fillRect(x - 7, h * 0.16, 14, h * 0.84);
+      g.fillStyle = dark; for (const x of [w * 0.25, w * 0.75]) g.fillRect(x - 2, h * 0.16, 4, h * 0.84);
     });
     map.wrapS = THREE.RepeatWrapping;
     return (MC[k] = WP.underwaterify(new THREE.MeshPhysicalMaterial({ map, roughness: 0.38, clearcoat: 0.45, clearcoatRoughness: 0.25 })));
@@ -74,7 +215,8 @@
     return MC[k] || (MC[k] = new THREE.MeshStandardMaterial({ color: hex, roughness: rough }));
   }
 
-  const SKINS = [0xf0c6a4, 0xdcaa82, 0xc08e66, 0x8a5a3a, 0xe8b894];
+  const SKINS = [0xf1c7a6, 0xe2b48e, 0xd2a07a, 0xbf8b63, 0xa7744e, 0x8a5a3a, 0x6c4430];
+  const HAIR = [0x1c1410, 0x2b1d14, 0x3a2a1c, 0x14100c];
 
   function capTexture(num, capHex, numHex, code) {
     return WP.canvasTex(256, 128, (g, w, h) => {
@@ -102,6 +244,20 @@
       g.fillStyle = numHex; g.font = '800 40px "Fira Sans Extra Condensed", "Arial Narrow", sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
       g.fillText(String(num), w / 2, h * 0.72);
     });
+  }
+
+  // Кач по образцу трансляций: изготовка → мяч за голову → выброс вперёд к лицу → стоп → снова изготовка
+  const PUMP = {
+    ready: { rs: 2.95, ra: 0.45, re: 0.9, yaw: 0.35, pitch: -0.08 },
+    cock: { rs: 3.3, ra: 0.4, re: 1.2, yaw: 0.5, pitch: -0.12 },
+    fwd: { rs: 2.2, ra: 0.18, re: 0.9, yaw: -0.35, pitch: 0.2 },
+  };
+  const eio = (u) => u * u * (3 - 2 * u), eout = (u) => 1 - (1 - u) * (1 - u) * (1 - u);
+  function pumpPhase(k) {
+    if (k < 0.2) return { a: PUMP.ready, b: PUMP.cock, u: eio(k / 0.2), f: -0.4 * eio(k / 0.2) };
+    if (k < 0.45) { const u = eout((k - 0.2) / 0.25); return { a: PUMP.cock, b: PUMP.fwd, u, f: -0.4 + 1.4 * u }; }
+    if (k < 0.6) return { a: PUMP.fwd, b: PUMP.fwd, u: 0, f: 1 };
+    const u = eio((k - 0.6) / 0.4); return { a: PUMP.fwd, b: PUMP.ready, u, f: 1 - u };
   }
 
   function angNorm(a) { while (a > Math.PI) a -= TAU; while (a < -Math.PI) a += TAU; return a; }
@@ -165,26 +321,22 @@
       add(body, G.torso, mSkin);
       add(body, G.suit, mSuit);
       const bw = this.bw;
-      for (const zs of [-1, 1]) {
-        add(body, s.ball, mSkin, 0.1, -0.09, zs * 0.075 * bw, 0.045, 0.058, 0.085);   // грудные
-        add(body, s.ball, mSkin, 0, -0.015, zs * 0.2 * bw, 0.068, 0.074, 0.064);     // дельты
-        add(body, s.ball, mSkin, -0.075, -0.2, zs * 0.1 * bw, 0.04, 0.12, 0.07);     // широчайшие
-      }
-      add(body, s.ball, mSkin, -0.02, 0.06, 0, 0.055, 0.035, 0.1 * bw);             // трапеция
-      add(body, s.ball, mSkin, 0.072, -0.3, 0, 0.03, 0.12, 0.085 * bw);            // пресс
+      // Мышцы вылеплены прямо в торсе; трапеция — мягкий скат от шеи к плечам
+      add(body, s.ball, mSkin, -0.012, 0.062, 0, 0.05, 0.03, 0.105 * bw);
       const neck = new THREE.Group(); neck.position.y = 0.09; body.add(neck);
       add(neck, s.neck, mSkin, 0, 0.03, 0);
       const headG = new THREE.Group(); headG.position.y = 0.14; neck.add(headG);
-      add(headG, s.head, mSkin, 0, 0, 0, 1.08, 1.14, 0.95);
-      add(headG, s.jaw, mSkin, 0.03, -0.055, 0, 1.0, 0.85, 1.12);
-      add(headG, s.nose, mSkin, 0.108, -0.005, 0);
-      add(headG, s.ball, mSkin, 0.084, 0.04, 0, 0.026, 0.013, 0.074);             // надбровье
+      const HG = headGeo();
+      add(headG, HG.head, mSkin);
+      // Борода или щетина — у части игроков
+      const hb = WP.hash(this.name + 'beard');
+      if (hb < 0.4) add(headG, HG.beard, plainMat(new THREE.Color(skin).lerp(new THREE.Color(HAIR[Math.floor(hb * 10) % HAIR.length]), hb < 0.2 ? 0.8 : 0.5).getHex(), 0.95));
       for (const zs of [-1, 1]) {
-        add(headG, s.ball, mDark, 0.092, 0.02, zs * 0.035, 0.008, 0.008, 0.012);   // глаза
-        const b = add(headG, s.ball, mBrow, 0.098, 0.048, zs * 0.034, 0.006, 0.004, 0.02); // брови
+        add(headG, s.ball, mDark, 0.088, 0.014, zs * 0.034, 0.008, 0.009, 0.011);   // глаза в глазницах
+        const b = add(headG, s.ball, mBrow, 0.106, 0.036, zs * 0.034, 0.006, 0.004, 0.02); // брови по надбровью
         b.rotation.x = zs * 0.12;
       }
-      add(headG, s.cap, mCap, -0.004, 0.012, 0, 1.1, 1.16, 0.99);
+      add(headG, HG.cap, mCap);
       for (const zs of [-1, 1]) {
         const e = add(headG, s.ear, mEar, -0.012, -0.012, zs * 0.094, 1.05, 1.0, 1.25);
         e.rotation.x = zs > 0 ? 0 : Math.PI;
@@ -194,9 +346,8 @@
       const mkArm = (side) => {
         const sh = new THREE.Group(); sh.position.set(0, -0.02, side * 0.2 * bw); body.add(sh);
         add(sh, G.upper, mSkin);
-        add(sh, s.ball, mSkin, 0.026 * bw, -0.15, 0, 0.034 * bw, 0.075, 0.038 * bw); // бицепс
         const el = new THREE.Group(); el.position.y = -0.3; sh.add(el);
-        add(el, s.joint, mSkin, 0, 0, 0, 0.043 * bw, 0.043 * bw, 0.043 * bw);         // локоть без щели на сгибе
+        add(el, s.joint, mSkin, 0, 0, 0, 0.04 * bw, 0.04 * bw, 0.04 * bw);            // локоть без щели на сгибе
         add(el, G.fore, mSkin);
         const hand = new THREE.Group(); hand.position.y = -0.265; el.add(hand);
         add(hand, s.ball, mSkin, 0, -0.048, 0, 0.022, 0.056, 0.046);               // ладонь
@@ -324,8 +475,8 @@
         else if (style === 'back') { f = -0.1 * k; lat = (0.25 + 0.2 * k) * hh; y = by + 0.45 * hh; }
         else { const ez = k * k * (3 - 2 * k); f = 0.08 - 0.42 * ez; y = by + (0.62 + 0.02 * ez) * hh; }
       } else if (a && a.type === 'fake') {
-        const q = Math.sin(Math.min(1, a.t / a.dur) * Math.PI);
-        f = -0.3 + 0.42 * q; y = by + (0.64 - 0.04 * q) * hh;
+        const q = pumpPhase(Math.min(1, a.t / a.dur)).f;
+        f = -0.1 + 0.34 * q; lat = (0.2 - 0.07 * Math.max(0, q)) * this.bw * hh; y = by + (0.68 - 0.06 * Math.max(0, q)) * hh;
       }
       out.set(this.x + c * f - s * lat, y, this.z + s * f + c * lat);
       return out;
@@ -377,7 +528,7 @@
       const bob = 0.02 * Math.sin(ph) * (1 - K);
 
       const T = {
-        y: (0.03 + this.lift * 0.45 + bob) * (1 - K) + (-0.04) * K,
+        y: (0.03 + this.lift * (this.isGK ? 0.45 : 0.37) + bob) * (1 - K) + (-0.04) * K,
         pitch: (0.16 - this.lift * 0.1) * (1 - K) + 1.2 * K,
         roll: 0.03 * Math.sin(t * 1.3 + this.seed) * (1 - K), yaw: 0,
       };
@@ -400,8 +551,12 @@
       T.hlk = (-1.6 + 0.5 * Math.cos(ph * 1.6 + Math.PI)) * (1 - K) + (-0.35 - 0.35 * Math.max(0, Math.sin(ph * 2.2 + Math.PI))) * K;
       let gkIK = false, ikR = null, ikL = null;
 
-      if (this.hasBall && this.holdMode === 'hold' && !act) { T.rs = 2.75; T.ra = 0.2; T.re = 0.5; }
-      if (this.isGK && !this.hasBall && !act && K < 0.5) { T.rs = 2.05; T.ra = 0.8; T.re = 0.45; T.ls = 2.05; T.la = 0.8; T.le = 0.45; }
+      // С мячом у ворот — «на изготовке», как в трансляциях: мяч высоко сбоку от головы на ладони, локоть согнут, корпус чуть развёрнут
+      if (this.hasBall && this.holdMode === 'hold' && !act) {
+        const gd = Math.abs(this.team.dir * WP.R.HALF_L - this.x);
+        if (!this.isGK && gd < 10) Object.assign(T, PUMP.ready); else { T.rs = 2.75; T.ra = 0.2; T.re = 0.5; }
+      }
+      if (this.isGK && !this.hasBall && !act && K < 0.5) { T.rs = 1.85; T.ra = 1.0; T.re = 0.5; T.ls = 1.85; T.la = 1.0; T.le = 0.5; } // руки широко, ладони у воды
       let fast = false;
       if (act) {
         const k = Math.min(1, act.t / act.dur);
@@ -435,10 +590,12 @@
             }
             fast = true;
             break;
-          case 'fake': { // кач: из замаха рука резко идёт вперёд, как на бросок, и останавливается
-            const q = Math.sin(k * Math.PI);
-            T.rs = 3.45 - 1.0 * q; T.ra = 0.22; T.re = 0.85 - 0.6 * q; T.ls = 1.8; T.la = 0.5; T.le = 0.2;
-            T.yaw = 0.7 - 0.9 * q; T.pitch = -0.08 + 0.3 * q; fast = true;
+          case 'fake': { // кач: мяч уходит за голову, резкий выброс вперёд перед лицом, жёсткая остановка, возврат на изготовку
+            const ph = pumpPhase(k);
+            for (const key in PUMP.ready) T[key] = ph.a[key] + (ph.b[key] - ph.a[key]) * ph.u;
+            // Свободная рука держит равновесие под водой
+            T.ls = 1.15 + 0.1 * Math.sin(t * 9); T.la = 0.8; T.le = 0.55;
+            fast = true;
             break;
           }
           case 'drawfoul': // упирается в защитника спиной, мяч поднят над водой — показывает судье захват
@@ -482,6 +639,7 @@
         }
       }
 
+      if (this.poseOverride) { Object.assign(T, this.poseOverride); fast = true; }
       const sK = Math.min(1, dt * (fast ? 30 : 14));
       for (const key in T) {
         if (j[key] === undefined) continue;
@@ -513,8 +671,9 @@
       rig.body.rotation.set(roll, j.yaw, -(j.pitch - gF * 0.6));
       rig.neck.rotation.z = j.pitch * 0.85;
       if (ball) {
-        const a = Math.atan2(ball.pos.z - this.z, ball.pos.x - this.x);
-        const d = Math.max(-1.1, Math.min(1.1, angNorm(-(a - this.heading))));
+        // С мячом смотрит вперёд (на ворота/партнёра), без мяча — следит за мячом
+        const a = this.hasBall ? this.heading : Math.atan2(ball.pos.z - this.z, ball.pos.x - this.x);
+        const d = Math.max(-1.1, Math.min(1.1, angNorm(-(a - this.heading)))) - (this.hasBall ? j.yaw * 0.8 : 0);
         rig.neck.rotation.y += (d * 0.8 - rig.neck.rotation.y) * Math.min(1, dt * 5);
       }
       this.setArm(rig.aR, j.rs, j.ra, j.re, 1);

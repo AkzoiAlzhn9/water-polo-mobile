@@ -311,6 +311,12 @@
 
   WP.debug = {
     speed(s) { timeScale = s; },
+    // Камера для осмотра моделей: cam(игрок, угол, расстояние, высота, высота взгляда); cam() — вернуть обычную
+    cam(p, ang, dist, h, lookY) {
+      if (!p) { world.camOverride = null; return; }
+      const a = p.heading + (ang || 0), d = dist || 2.6;
+      world.camOverride = { pos: new THREE.Vector3(p.x + Math.cos(a) * d, h || 1.1, p.z + Math.sin(a) * d), look: new THREE.Vector3(p.x, lookY || 0.6, p.z) };
+    },
     get match() { return match; },
     get world() { return world; },
     sim(seconds) { for (let i = 0; i < seconds * 120; i++) match.step(STEP); },
