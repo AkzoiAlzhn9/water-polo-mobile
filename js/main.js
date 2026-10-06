@@ -334,7 +334,7 @@
         const s = att.players.find(p => !p.isGK); s.x = WP.R.HALF_L - dist; s.z = zOff; s.heading = Math.atan2(-zOff, dist); s.lift = 0.2;
         m.ball.attach(s); s.holdMode = 'hold'; s.decideT = 99;
         const side = Math.random() < 0.5 ? -1 : 1;
-        m.startShot(s, { type: kind || 'power', ai: true, zAim: side * (1.0 + Math.random() * 0.32), yAim: Math.random() < 0.62 ? 0.62 + Math.random() * 0.18 : 0.15 + Math.random() * 0.17, power: 0.72 + Math.random() * 0.28 });
+        m.startShot(s, { type: kind || 'power', ai: true, zAim: side * (1.0 + Math.random() * 0.32) * WP.R.GOAL_HALF_W / 1.5, yAim: Math.random() < 0.62 ? 0.62 + Math.random() * 0.18 : 0.15 + Math.random() * 0.17, power: 0.72 + Math.random() * 0.28 });
         let f = null;
         for (let k = 0; k < 480; k++) {
           m.step(STEP);
@@ -373,7 +373,7 @@
           if (caught >= 0 && !shot && m.t - caught >= wait && (!b.action || b.action.type === 'catch')) {
             b.action = null; shot = true;
             const sd = gk.vz > 0.2 ? -1 : gk.vz < -0.2 ? 1 : (gk.z > b.z * 0.12 ? -1 : 1);
-            m.startShot(b, { type: kind || 'power', ai: true, quick: wait < 0.3, zAim: sd * (1.0 + Math.random() * 0.32), yAim: Math.random() < 0.62 ? 0.62 + Math.random() * 0.18 : 0.15 + Math.random() * 0.17, power: 0.72 + Math.random() * 0.28 });
+            m.startShot(b, { type: kind || 'power', ai: true, quick: wait < 0.3, zAim: sd * (1.0 + Math.random() * 0.32) * WP.R.GOAL_HALF_W / 1.5, yAim: Math.random() < 0.62 ? 0.62 + Math.random() * 0.18 : 0.15 + Math.random() * 0.17, power: 0.72 + Math.random() * 0.28 });
           }
           if (!f && m.ball.flight && m.ball.flight.type === 'shot') { f = m.ball.flight; lag += gk.save ? gk.save.lag || 0 : 0; }
           if (caught < 0 && m.ball.holder && m.ball.holder !== a) break;

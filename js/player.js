@@ -16,7 +16,7 @@
       cap: new THREE.SphereGeometry(0.106, 24, 12, 0, TAU, 0, Math.PI * 0.56),
       ear: new THREE.SphereGeometry(0.046, 18, 8, 0, TAU, 0, Math.PI * 0.5),
       strap: new THREE.TorusGeometry(0.078, 0.005, 6, 20, Math.PI),
-      neck: new THREE.CylinderGeometry(0.06, 0.074, 0.14, 16),
+      neck: new THREE.CylinderGeometry(0.066, 0.082, 0.14, 16),
       beard: new THREE.SphereGeometry(0.104, 20, 10, Math.PI * 0.6, Math.PI * 0.8, Math.PI * 0.6, Math.PI * 0.33),
       ball: new THREE.SphereGeometry(1, 14, 10),
       joint: new THREE.SphereGeometry(1, 12, 8),
@@ -76,8 +76,8 @@
 
   // Торс ватерполиста: широкие плечи и широчайшие, грудные с ложбинкой, пресс, позвоночник и лопатки, узкая талия
   function torsoShape(bw) {
-    const W = prof([[0.12, 0.052], [0.09, 0.08], [0.065, 0.135], [0.035, 0.182], [0.0, 0.206], [-0.04, 0.208], [-0.1, 0.196], [-0.17, 0.186], [-0.25, 0.168], [-0.34, 0.15], [-0.43, 0.137], [-0.5, 0.142], [-0.56, 0.152], [-0.62, 0.146], [-0.655, 0.115], [-0.68, 0.05]]);
-    const F = prof([[0.12, 0.046], [0.09, 0.062], [0.05, 0.086], [0.0, 0.104], [-0.06, 0.122], [-0.11, 0.128], [-0.16, 0.118], [-0.22, 0.11], [-0.3, 0.106], [-0.4, 0.104], [-0.48, 0.102], [-0.56, 0.106], [-0.62, 0.098], [-0.655, 0.075], [-0.68, 0.03]]);
+    const W = prof([[0.12, 0.056], [0.09, 0.09], [0.065, 0.148], [0.035, 0.198], [0.0, 0.226], [-0.04, 0.228], [-0.1, 0.212], [-0.17, 0.196], [-0.25, 0.172], [-0.34, 0.15], [-0.43, 0.137], [-0.5, 0.142], [-0.56, 0.152], [-0.62, 0.146], [-0.655, 0.115], [-0.68, 0.05]]);
+    const F = prof([[0.12, 0.048], [0.09, 0.066], [0.05, 0.092], [0.0, 0.11], [-0.06, 0.128], [-0.11, 0.134], [-0.16, 0.122], [-0.22, 0.11], [-0.3, 0.106], [-0.4, 0.104], [-0.48, 0.102], [-0.56, 0.106], [-0.62, 0.098], [-0.655, 0.075], [-0.68, 0.03]]);
     const B = prof([[0.12, 0.046], [0.09, 0.068], [0.05, 0.096], [0.0, 0.11], [-0.07, 0.116], [-0.15, 0.11], [-0.25, 0.098], [-0.36, 0.088], [-0.45, 0.086], [-0.52, 0.098], [-0.58, 0.116], [-0.63, 0.108], [-0.655, 0.08], [-0.68, 0.03]]);
     return (y, a) => {
       const c = Math.cos(a), sn = Math.sin(a), n = 2.5;
@@ -86,7 +86,7 @@
       const lz = z / bw;
       let bump = 0;
       if (c > 0) {
-        for (const zs of [-1, 1]) { const dz = (lz - zs * 0.086) / 0.068, dy = y + 0.085, sy = dy < 0 ? 0.032 : 0.065; bump += 0.019 * Math.exp(-dz * dz - (dy / sy) * (dy / sy)) * c; } // грудные
+        for (const zs of [-1, 1]) { const dz = (lz - zs * 0.09) / 0.072, dy = y + 0.085, sy = dy < 0 ? 0.03 : 0.065; bump += 0.025 * Math.exp(-dz * dz - (dy / sy) * (dy / sy)) * c; } // грудные
         bump -= 0.007 * Math.exp(-(lz / 0.013) * (lz / 0.013)) * win(y, -0.22, -0.02) * c;                   // грудина
         for (const yy of [-0.25, -0.315, -0.38]) for (const zs of [-1, 1]) { const dz = (lz - zs * 0.036) / 0.022, dy = (y - yy) / 0.023; bump += 0.0055 * Math.exp(-dz * dz - dy * dy) * c; } // пресс
         bump -= 0.004 * Math.exp(-(lz / 0.008) * (lz / 0.008)) * win(y, -0.43, -0.22) * c;                   // белая линия
@@ -101,18 +101,18 @@
   }
   // Рука: дельта шапкой сверху, бицепс спереди, трицепс сзади; предплечье толще у локтя
   function upperShape(g) {
-    const R = prof([[0.065, 0.012], [0.05, 0.046], [0.025, 0.064], [-0.015, 0.066], [-0.06, 0.057], [-0.11, 0.051], [-0.17, 0.049], [-0.23, 0.045], [-0.28, 0.04], [-0.315, 0.036]]);
+    const R = prof([[0.07, 0.014], [0.055, 0.056], [0.028, 0.078], [-0.015, 0.079], [-0.06, 0.068], [-0.11, 0.061], [-0.17, 0.058], [-0.23, 0.053], [-0.28, 0.047], [-0.315, 0.042]]);
     return (y, a) => {
       const c = Math.cos(a), sn = Math.sin(a);
       let r = R(y) * g;
-      r += 0.013 * g * Math.exp(-((y + 0.165) / 0.06) * ((y + 0.165) / 0.06)) * Math.pow(Math.max(0, c), 1.5);   // бицепс
-      r += 0.011 * g * Math.exp(-((y + 0.12) / 0.075) * ((y + 0.12) / 0.075)) * Math.pow(Math.max(0, -c), 1.2); // трицепс
-      r += 0.007 * g * win(y, -0.09, 0.035, 0.04) * Math.abs(sn);                                               // дельта сбоку
+      r += 0.018 * g * Math.exp(-((y + 0.165) / 0.06) * ((y + 0.165) / 0.06)) * Math.pow(Math.max(0, c), 1.5);   // бицепс
+      r += 0.015 * g * Math.exp(-((y + 0.12) / 0.075) * ((y + 0.12) / 0.075)) * Math.pow(Math.max(0, -c), 1.2); // трицепс
+      r += 0.012 * g * win(y, -0.09, 0.04, 0.04) * Math.abs(sn);                                                // дельта сбоку
       return [c * r, sn * r * 0.94];
     };
   }
   function foreShape(g) {
-    const R = prof([[0.025, 0.02], [0.01, 0.038], [-0.03, 0.046], [-0.08, 0.044], [-0.14, 0.037], [-0.2, 0.03], [-0.25, 0.026], [-0.275, 0.024]]);
+    const R = prof([[0.025, 0.024], [0.01, 0.044], [-0.03, 0.054], [-0.08, 0.051], [-0.14, 0.042], [-0.2, 0.034], [-0.25, 0.029], [-0.275, 0.027]]);
     return (y, a) => {
       const c = Math.cos(a), sn = Math.sin(a);
       let r = R(y) * g;
@@ -193,7 +193,23 @@
   const MC = {};
   function skinMat(hex) {
     const k = 'skin' + hex;
-    return MC[k] || (MC[k] = WP.underwaterify(new THREE.MeshPhysicalMaterial({ color: hex, roughness: 0.55, clearcoat: 0.32, clearcoatRoughness: 0.38, sheen: 0.2, sheenRoughness: 0.7, sheenColor: new THREE.Color(0xffe2cc) })));
+    return MC[k] || (MC[k] = WP.underwaterify(new THREE.MeshPhysicalMaterial({ color: hex, map: skinTex(), roughness: 0.46, clearcoat: 0.45, clearcoatRoughness: 0.3, sheen: 0.2, sheenRoughness: 0.7, sheenColor: new THREE.Color(0xffe2cc) })));
+  }
+  // Кожа неоднородная: лёгкие пятна и поры, чтобы не выглядела пластиком (текстура общая, тон — цветом материала)
+  let SKT = null;
+  function skinTex() {
+    if (SKT) return SKT;
+    SKT = WP.canvasTex(128, 128, (g, w, h) => {
+      g.fillStyle = '#ffffff'; g.fillRect(0, 0, w, h);
+      let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+      for (let i = 0; i < 900; i++) {
+        const v = 225 + Math.floor(rnd() * 30), r = 1 + rnd() * 5;
+        g.fillStyle = 'rgba(' + v + ',' + (v - 6) + ',' + (v - 10) + ',0.35)';
+        g.beginPath(); g.arc(rnd() * w, rnd() * h, r, 0, TAU); g.fill();
+      }
+    });
+    SKT.wrapS = SKT.wrapT = THREE.RepeatWrapping; SKT.repeat.set(3, 3);
+    return SKT;
   }
   function suitMat(team) {
     const k = 'suit' + team.code + team.suitHex + team.numHex;
@@ -246,18 +262,19 @@
     });
   }
 
-  // Кач по образцу трансляций: изготовка → мяч за голову → выброс вперёд к лицу → стоп → снова изготовка
+  // Кач как в трейлере Water Polo Revolution: мяч высоко над головой на почти прямой руке → чуть назад →
+  // рука выстреливает вперёд-вверх, как на бросок, и замирает перед самым выпуском → возврат наверх
   const PUMP = {
-    ready: { rs: 2.95, ra: 0.45, re: 0.9, yaw: 0.35, pitch: -0.08 },
-    cock: { rs: 3.3, ra: 0.4, re: 1.2, yaw: 0.5, pitch: -0.12 },
-    fwd: { rs: 2.2, ra: 0.18, re: 0.9, yaw: -0.35, pitch: 0.2 },
+    ready: { rs: 3.0, ra: 0.3, re: 0.35, yaw: 0.3, pitch: -0.08 },
+    cock: { rs: 3.4, ra: 0.3, re: 0.55, yaw: 0.5, pitch: -0.14 },
+    fwd: { rs: 2.2, ra: 0.15, re: 0.12, yaw: -0.45, pitch: 0.28 },
   };
   const eio = (u) => u * u * (3 - 2 * u), eout = (u) => 1 - (1 - u) * (1 - u) * (1 - u);
   function pumpPhase(k) {
-    if (k < 0.2) return { a: PUMP.ready, b: PUMP.cock, u: eio(k / 0.2), f: -0.4 * eio(k / 0.2) };
-    if (k < 0.45) { const u = eout((k - 0.2) / 0.25); return { a: PUMP.cock, b: PUMP.fwd, u, f: -0.4 + 1.4 * u }; }
-    if (k < 0.6) return { a: PUMP.fwd, b: PUMP.fwd, u: 0, f: 1 };
-    const u = eio((k - 0.6) / 0.4); return { a: PUMP.fwd, b: PUMP.ready, u, f: 1 - u };
+    if (k < 0.18) return { a: PUMP.ready, b: PUMP.cock, u: eio(k / 0.18), f: -0.4 * eio(k / 0.18) };
+    if (k < 0.42) { const u = eout((k - 0.18) / 0.24); return { a: PUMP.cock, b: PUMP.fwd, u, f: -0.4 + 1.4 * u }; }
+    if (k < 0.56) return { a: PUMP.fwd, b: PUMP.fwd, u: 0, f: 1 };
+    const u = eio((k - 0.56) / 0.44); return { a: PUMP.fwd, b: PUMP.ready, u, f: 1 - u };
   }
 
   function angNorm(a) { while (a > Math.PI) a -= TAU; while (a < -Math.PI) a += TAU; return a; }
@@ -325,7 +342,7 @@
       add(body, s.ball, mSkin, -0.012, 0.062, 0, 0.05, 0.03, 0.105 * bw);
       const neck = new THREE.Group(); neck.position.y = 0.09; body.add(neck);
       add(neck, s.neck, mSkin, 0, 0.03, 0);
-      const headG = new THREE.Group(); headG.position.y = 0.14; neck.add(headG);
+      const headG = new THREE.Group(); headG.position.y = 0.14; headG.scale.setScalar(0.93); neck.add(headG); // голова чуть меньше — плечи кажутся мощнее
       const HG = headGeo();
       add(headG, HG.head, mSkin);
       // Борода или щетина — у части игроков
@@ -344,14 +361,14 @@
       const strap = add(headG, s.strap, mStrap, 0.02, -0.04, 0);
       strap.rotation.set(0, Math.PI / 2, Math.PI);
       const mkArm = (side) => {
-        const sh = new THREE.Group(); sh.position.set(0, -0.02, side * 0.2 * bw); body.add(sh);
+        const sh = new THREE.Group(); sh.position.set(0, -0.02, side * 0.22 * bw); body.add(sh);
         add(sh, G.upper, mSkin);
         const el = new THREE.Group(); el.position.y = -0.3; sh.add(el);
         add(el, s.joint, mSkin, 0, 0, 0, 0.04 * bw, 0.04 * bw, 0.04 * bw);            // локоть без щели на сгибе
         add(el, G.fore, mSkin);
         const hand = new THREE.Group(); hand.position.y = -0.265; el.add(hand);
-        add(hand, s.ball, mSkin, 0, -0.048, 0, 0.022, 0.056, 0.046);               // ладонь
-        const fing = add(hand, s.ball, mSkin, 0.008, -0.122, 0, 0.015, 0.048, 0.041); // сомкнутые пальцы, чуть согнуты
+        add(hand, s.ball, mSkin, 0, -0.055, 0, 0.027, 0.066, 0.055);               // ладонь — у ватерполистов крупная
+        const fing = add(hand, s.ball, mSkin, 0.01, -0.142, 0, 0.018, 0.058, 0.05); // сомкнутые пальцы, чуть согнуты
         fing.rotation.z = 0.22;
         const th = add(hand, s.ball, mSkin, 0.02, -0.05, side * 0.04, 0.014, 0.034, 0.015); // большой палец
         th.rotation.x = -side * 0.5;
@@ -430,7 +447,10 @@
       if (this.z > b.z1) { this.z = b.z1; this.vz = Math.min(0, this.vz); }
       const sp = this.speed;
       let wantH = null;
-      if (this.faceTo && (sp < 0.9 || (this.hasBall && this.holdMode === 'hold'))) wantH = Math.atan2(this.faceTo.z - this.z, this.faceTo.x - this.x);
+      // С мячом не «смотрит» на точку у себя в руке (это сам мяч) — иначе игрок крутился на месте
+      let ft = this.faceTo;
+      if (ft && this.hasBall && Math.hypot(ft.x - this.x, ft.z - this.z) < 1.2) ft = null;
+      if (ft && (sp < 0.9 || (this.hasBall && this.holdMode === 'hold'))) wantH = Math.atan2(ft.z - this.z, ft.x - this.x);
       else if (sp > 0.25) wantH = Math.atan2(this.vz, this.vx);
       if (wantH !== null) {
         const d = angNorm(wantH - this.heading);
@@ -468,7 +488,7 @@
       }
       // Кисть правой руки считается аналитически, чтобы логика не зависела от рендера
       const by = this.bodyY(), hh = this.h;
-      let f = 0.08, lat = 0.21 * this.bw * hh, y = by + 0.62 * hh;
+      let f = 0.08, lat = 0.225 * this.bw * hh, y = by + 0.62 * hh;
       if (a && a.type === 'windup') {
         const k = Math.min(1, a.t / Math.min(a.dur, 0.45));
         if (style === 'side') { f = 0.0 - 0.15 * k; lat = (0.3 + 0.25 * k) * hh; y = by + (0.42 - 0.08 * k) * hh; }
@@ -476,7 +496,7 @@
         else { const ez = k * k * (3 - 2 * k); f = 0.08 - 0.42 * ez; y = by + (0.62 + 0.02 * ez) * hh; }
       } else if (a && a.type === 'fake') {
         const q = pumpPhase(Math.min(1, a.t / a.dur)).f;
-        f = -0.1 + 0.34 * q; lat = (0.2 - 0.07 * Math.max(0, q)) * this.bw * hh; y = by + (0.68 - 0.06 * Math.max(0, q)) * hh;
+        f = -0.12 + 0.45 * q; lat = (0.215 - 0.05 * Math.max(0, q)) * this.bw * hh; y = by + (0.8 - 0.06 * Math.max(0, q)) * hh;
       }
       out.set(this.x + c * f - s * lat, y, this.z + s * f + c * lat);
       return out;

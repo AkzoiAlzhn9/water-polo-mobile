@@ -558,7 +558,7 @@
     // После перепаса — в угол, из которого вратарь уплывает
     const quick = !!(o && o.quick);
     if (quick && gk && Math.abs(gk.vz) > 0.2) side = gk.vz > 0 ? -1 : 1;
-    const zAim = side * rnd(1.0, 1.32);
+    const zAim = side * rnd(1.0, 1.32) * R.GOAL_HALF_W / 1.5;
     // Вратарь купился на кач и опускается — бросок в верхний угол
     let yAim = gk && gk.biteT > 0 ? rnd(0.66, 0.8) : Math.random() < 0.62 ? rnd(0.62, 0.8) : rnd(0.15, 0.32);
     const goalAng = Math.atan2(-p.z, team.dir * R.HALF_L - p.x);

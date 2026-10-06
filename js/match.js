@@ -678,7 +678,7 @@
       const pause = p.pumpN >= 1 && p.pumpGap > 0 && gap - p.pumpGap > 0.25;
       p.pumpGap = p.pumpN >= 1 ? gap : 0;
       p.pumpN = (p.pumpN || 0) + 1;
-      p.action = { type: 'fake', t: 0, dur: 0.4 };
+      p.action = { type: 'fake', t: 0, dur: 0.42 };
       p.holdMode = 'hold';
       p.lastFakeT = this.t;
       // Ноги устают: после третьего кача игрок проседает
@@ -984,9 +984,9 @@
 
     humanAim(p, inp) {
       const gk = p.team.opp.gk;
-      if (inp && Math.abs(inp.z) > 0.35 * Math.max(0.3, inp.mag)) return Math.sign(inp.z) * 1.18;
+      if (inp && Math.abs(inp.z) > 0.35 * Math.max(0.3, inp.mag)) return Math.sign(inp.z) * 1.18 * R.GOAL_HALF_W / 1.5;
       const gkz = gk && gk.active ? gk.z : 0;
-      return (gkz > p.z * 0.12 ? -1 : 1) * 1.15;
+      return (gkz > p.z * 0.12 ? -1 : 1) * 1.15 * R.GOAL_HALF_W / 1.5;
     }
 
     applyHumans(dt) {
@@ -1015,6 +1015,8 @@
         const penShooter = this.state === 'penalty' && rs && rs.ready && rs.taker === p;
         const receiving = ball.state === 'free' && ball.flight && ball.flight.type === 'pass' && ball.flight.to === p && inp.mag < 0.5;
         p.input.x = inp.x; p.input.z = inp.z; p.input.sprint = inp.sprint;
+        // С мячом и без стика: у ворот разворачивается к воротам, дальше — держит направление
+        if (p.hasBall && inp.mag < 0.12) p.faceTo = AI.goalDist(team, p.x, p.z) < 12 ? { x: team.dir * R.HALF_L, z: 0 } : null;
         // Без нажатий защитник сам держит позицию (помощник), как только тронул стик — управляешь ты
         // Помощник в защите можно выключить в «Настройке управления» — тогда без нажатий игрок стоит на месте
         const idle = (inp.assist !== undefined ? inp.assist : WP.Input.opts.assist) && !p.hasBall && inp.mag < 0.12 && !(p.action && p.action.type === 'steal');
@@ -1399,7 +1401,7 @@
       const human = this.isHumanActing(shooter);
       if (!shooter.action && ((!human && rs.readyT > rs.shotAt) || rs.readyT > 4)) {
         const side = Math.random() < 0.5 ? -1 : 1;
-        this.startShot(shooter, { type: Math.random() < 0.12 ? 'skip' : 'power', ai: true, zAim: side * rnd(1.0, 1.3), yAim: Math.random() < 0.6 ? rnd(0.6, 0.82) : rnd(0.12, 0.3), power: rnd(0.8, 1) });
+        this.startShot(shooter, { type: Math.random() < 0.12 ? 'skip' : 'power', ai: true, zAim: side * rnd(1.0, 1.3) * R.GOAL_HALF_W / 1.5, yAim: Math.random() < 0.6 ? rnd(0.6, 0.82) : rnd(0.12, 0.3), power: rnd(0.8, 1) });
       }
     }
 
