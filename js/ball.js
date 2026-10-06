@@ -213,7 +213,7 @@
           ev.push({ type: 'goal', side });
         }
         if (this.inGoal === side) {
-          if (depth > R.GOAL_DEPTH - r) { p.x = gx + side * (R.GOAL_DEPTH - r); if (v.x * side > 0) { v.x *= -0.15; ev.push({ type: 'net' }); } v.z *= 0.5; v.y *= 0.5; }
+          if (depth > R.GOAL_DEPTH - r) { p.x = gx + side * (R.GOAL_DEPTH - r); if (v.x * side > 0) { ev.push({ type: 'net', side, z: p.z, y: p.y, speed: Math.abs(v.x) }); v.x *= -0.15; } v.z *= 0.5; v.y *= 0.5; }
           if (Math.abs(p.z) > R.GOAL_HALF_W - r) { p.z = Math.sign(p.z) * (R.GOAL_HALF_W - r); v.z *= -0.2; }
           if (p.y > R.GOAL_H - r) { p.y = R.GOAL_H - r; v.y = Math.min(0, v.y) * 0.2; }
           if (depth < r) { p.x = gx + side * r; v.x = Math.abs(v.x) * side * 0.1; }

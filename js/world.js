@@ -418,8 +418,10 @@
       });
       netTex.wrapS = netTex.wrapT = THREE.RepeatWrapping;
       const mkNet = (rx, ry) => { const t = netTex.clone(); t.needsUpdate = true; t.repeat.set(rx, ry); return new THREE.MeshBasicMaterial({ map: t, transparent: true, opacity: 0.55, side: THREE.DoubleSide, depthWrite: false }); };
-      const backNet = new THREE.Mesh(new THREE.PlaneGeometry(hw * 2, 1.5), mkNet(15, 7));
+      const backNet = new THREE.Mesh(new THREE.PlaneGeometry(hw * 2, 1.5, 20, 10), mkNet(15, 7));
       backNet.position.set(back, 0.15, 0); backNet.rotation.y = Math.PI / 2; g.add(backNet);
+      // Сетка прогибается от мяча и колышется (смещения считаются от исходных точек)
+      g.userData.net = { mesh: backNet, base: backNet.geometry.attributes.position.array.slice(), side, hw, t: 9, z: 0, y: 0, amp: 0, rest: true };
       const topNet = new THREE.Mesh(new THREE.PlaneGeometry(R.GOAL_DEPTH, hw * 2), mkNet(3, 15));
       topNet.rotation.x = -Math.PI / 2; topNet.position.set(gx + side * R.GOAL_DEPTH / 2, R.GOAL_H, 0); g.add(topNet);
       for (const zz of [-hw, hw]) {
@@ -774,6 +776,31 @@
 
     setCamMode(m) { this.camMode = m; }
 
+    // Мяч ударил в сетку ворот: прогиб в точке удара, потом затухающие колебания
+    netHit(side, z, y, speed) {
+      const g = this.goals && this.goals[side > 0 ? 1 : 0], n = g && g.userData.net;
+      if (!n) return;
+      n.t = 0; n.z = z; n.y = y; n.amp = Math.min(0.5, 0.1 + (speed || 5) * 0.02); n.rest = false;
+    }
+    updateNets(dt) {
+      for (const g of this.goals || []) {
+        const n = g.userData.net; if (!n || n.rest) continue;
+        n.t += dt;
+        const pos = n.mesh.geometry.attributes.position, a = pos.array, b = n.base;
+        const k = n.t > 1.8 ? 0 : n.amp * (1 - Math.exp(-28 * n.t)) * Math.exp(-3 * n.t) * Math.cos(11 * n.t);
+        // Локальные оси сетки: x = −z мира, y = высота − 0,15, z — наружу из ворот (у ворот side = −1 наоборот)
+        const cx = -n.z, cy = n.y - 0.15;
+        for (let i = 0; i < a.length; i += 3) {
+          const bx = b[i], by = b[i + 1];
+          const pin = (1 - Math.pow(Math.abs(bx) / n.hw, 4)) * Math.max(0, Math.min(1, (0.75 - by) / 0.35));
+          const d2 = (bx - cx) * (bx - cx) + (by - cy) * (by - cy);
+          a[i + 2] = n.side * k * pin * Math.exp(-d2 / 0.22);
+        }
+        pos.needsUpdate = true;
+        if (n.t > 1.8) n.rest = true;
+      }
+    }
+
     updateCamera(dt, focus, opts) {
       const f = this.camFocus;
       f.lerp(focus, 1 - Math.exp(-dt * 3.2));
@@ -808,8 +835,10 @@
         tp = new THREE.Vector3(-dir * 19.5, 7.5, f.z * 0.25);
         tl = new THREE.Vector3(f.x + dir * 3, -0.5, f.z * 0.4);
       } else if (this.camMode === 'close') {
-        tp = new THREE.Vector3(f.x * 0.9, 5.2, f.z + 9.5);
-        tl = new THREE.Vector3(f.x, 0.2, f.z);
+        // Ближняя трансляция: сверху-сбоку, следует за мячом, игроки почти вдвое крупнее, чем на общем плане
+        const dir = (opts && opts.dir) || 1;
+        tp = new THREE.Vector3(f.x * 0.92 - dir * 0.8, 7.4, f.z * 0.4 + 12.8);
+        tl = new THREE.Vector3(f.x + dir * 0.6, -0.3, f.z * 0.62 - 0.3);
       } else if (narrow) {
         // Портретный экран: смотрим вдоль бассейна, длинная ось идёт вверх по экрану
         tp = new THREE.Vector3(f.x * 0.55 - 17.5, 12.5, f.z * 0.25);
@@ -825,6 +854,7 @@
 
     update(dt) {
       this.time += dt;
+      this.updateNets(dt);
       this.waterMat.uniforms.uTime.value = this.time;
       this.waterMat.uniforms.uCam.value.copy(this.camera.position);
       for (const m of this.floorMats) m.uniforms.uTime.value = this.time;

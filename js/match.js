@@ -1267,10 +1267,12 @@
         case 'dead': this.stepDead(dt); break;
         case 'sprint': this.stepSprint(); break;
         case 'penalty': this.stepPenalty(dt); break;
-        case 'goal':
-          this.ball.step(dt, null);
+        case 'goal': {
+          // Мяч долетает до сетки уже после гола — сетка должна прогнуться
+          for (const e of this.ball.step(dt, null)) if (e.type === 'net') this.handleBallEvent(e);
           if (this.stateT > 3.2) { if (this.so) this.nextKick(); else if (this.clock <= 0) this.endPeriod(); else this.setupThrowOff(this.goalConceded); }
           break;
+        }
         case 'timeout':
           if ((this.cfg.mode === 'demo' && this.stateT > 5) || this.stateT > 60) this.endTimeout();
           break;
@@ -1492,7 +1494,7 @@
           this.world.foam(ball.pos.x, ball.pos.z, 0.6, 0.9);
           WP.Audio.splash(0.7);
           return;
-        case 'net': WP.Audio.net(); return;
+        case 'net': WP.Audio.net(); if (this.world.netHit) this.world.netHit(e.side, e.z, e.y, e.speed); return;
         case 'hit': {
           const c = e.collider;
           WP.Audio.slap();

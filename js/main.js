@@ -4,8 +4,10 @@
   const V = new THREE.Vector3();
   const FOCUS = new THREE.Vector3();
   const CAMS = ['tv', 'high', 'end', 'close'];
-  const CAM_NAMES = { tv: 'Телекамера', high: 'Сверху', end: 'Из-за ворот', close: 'Крупный план' };
+  const CAM_NAMES = { tv: 'Общий план', high: 'Сверху', end: 'Из-за ворот', close: 'Ближе' };
   let world, match, paused = false, acc = 0, last = performance.now(), timeScale = 1, isDemo = true, lastCfg = null, camIdx = 0;
+  // Камера: выбор запоминается; на телефоне по умолчанию «Ближе» — на маленьком экране игроки иначе слишком мелкие
+  try { const c = localStorage.getItem('polo25_cam'); camIdx = c !== null ? Math.max(0, +c) : (window.matchMedia && matchMedia('(pointer: coarse)').matches ? 3 : 0); } catch (e) { camIdx = 0; }
 
   // ---------- Повтор гола: запись поз скелетов 30 раз в секунду и замедленное воспроизведение ----------
   const QA = new THREE.Quaternion(), QB = new THREE.Quaternion();
@@ -229,6 +231,7 @@
   function cycleCam() {
     if (isDemo) return;
     camIdx = (camIdx + 1) % CAMS.length;
+    try { localStorage.setItem('polo25_cam', camIdx); } catch (e) { /* без хранилища */ }
     world.setCamMode(CAMS[camIdx]);
     if (match) match.emit('banner', { title: 'Камера: ' + CAM_NAMES[CAMS[camIdx]], sub: '', tone: '' });
   }
