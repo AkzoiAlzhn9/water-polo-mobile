@@ -883,6 +883,36 @@
       return ((d.x - c.x) * rx + (d.z - c.z) * rz) < -0.2 && c.holdMode === 'hold';
     }
 
+    // Защитник ИИ пытается чисто забрать мяч; промах — секундная заминка, атакующий уходит
+    aiStrip(def, c, front, dribbling) {
+      def.stealCD = 1.1;
+      def.action = { type: 'steal', t: 0, dur: 0.35 };
+      const exposed = c.holdMode === 'hold' || (c.action && c.action.type === 'windup');
+      let p = dribbling ? (front ? 0.34 : 0.2) : exposed ? 0.28 : 0.16;
+      p += (def.attrs.def - c.attrs.pas) / 250 - (c.attrs.str - 80) / 500;
+      if (this.shielded(c, def)) p *= 0.5;
+      p *= 0.6 + 0.9 * Math.pow(clamp((def.team.ai.aggr - 0.45) / 0.25, 0, 1.2), 1.5); // уровень ИИ: любитель слабее, мировой класс злее
+      p = clamp(p, 0.06, 0.7);
+      const hum = !!c.team.human;
+      if (Math.random() < p) {
+        c.action = null;
+        if (Math.random() < 0.6) this.catchBall(def, 'steal');
+        else {
+          c.hasBall = false; this.ball.holder = null;
+          const kx = (def.x - c.x) * 0.3 + rnd(-0.6, 0.6), kz = (def.z - c.z) * 0.3 + rnd(-0.6, 0.6);
+          this.ball.pos.set(c.x + Math.cos(c.heading) * 0.4, 0.3, c.z + Math.sin(c.heading) * 0.4);
+          this.ball.release(new THREE.Vector3(kx * 2, 0.6, kz * 2), null);
+          this.ball.releaseT = this.t; this.ball.lastTouch = def;
+        }
+        def.team.stats.steals++; def.stats.steals++;
+        if (hum) this.announce('ЧИСТЫЙ ВЫНОС', def.name + ' забирает мяч у ' + c.name, 'red');
+        this.say(def.name + ' чисто выбивает мяч у ' + c.name + '.', 'info');
+      } else {
+        def.stunT = 0.45;
+        if (hum && c.ctrl && Math.random() < 0.3) this.emit('passinfo', { msg: front && dribbling ? 'Защитник в лоб — обведи его или отдай пас' : 'Ушёл от отбора' });
+      }
+    }
+
     cleanStrip(def, id) {
       const c = this.ball.holder;
       def.action = { type: 'steal', t: 0, dur: 0.35 };
@@ -1646,11 +1676,25 @@
         for (const d of c.team.opp.players) {
           if (!d.active || d.isGK || this.isHumanActing(d)) continue;
           const dist = Math.hypot(d.x - c.x, d.z - c.z);
-          if (dist > 1.0) continue;
+          if (dist > 1.2) continue;
           const exposed = c.holdMode === 'hold' || (c.action && c.action.type === 'windup');
           const lineD = AI.lineD(c.team, c.x);
           const gvx = c.team.dir * R.HALF_L - c.x, gvz = -c.z, gl = Math.hypot(gvx, gvz) || 1;
           const behind = ((d.x - c.x) * gvx + (d.z - c.z) * gvz) / (gl * dist) < -0.3;
+          // Чистый вынос защитником ИИ: спереди или сбоку. Ведение — мяч перед головой, его легко выбить тому, кто в лоб
+          if (!behind && dist < 1.15 && !(d.stealCD > 0) && !d.action && !(d.stunT > 0)) {
+            const sp = Math.hypot(c.vx, c.vz);
+            const mvx = sp > 0.3 ? c.vx / sp : Math.cos(c.heading), mvz = sp > 0.3 ? c.vz / sp : Math.sin(c.heading);
+            const front = ((d.x - c.x) * mvx + (d.z - c.z) * mvz) / dist > 0.35;
+            const dribbling = c.holdMode === 'dribble' || sp > 0.8;
+            // Часто — только когда ведущий плывёт прямо на защитника; просто стоять рядом с мячом почти безопасно
+            const into = dribbling && front && sp > 0.7;
+            // Против ведущего-человека в полную силу; ИИ-атакующие и так не лезут напролом — им редко
+            const vsHuman = !!(c.ctrl && c.team.human);
+            const lv = d.team.ai.aggr / 0.6, rateS = (into ? 1.0 : dribbling ? 0.12 : exposed ? 0.08 : 0.04) * lv * lv * (d.team.ai.pressing ? 1.3 : 1) * (vsHuman ? 1 : 0.12);
+            if (Math.random() < 1 - Math.exp(-rateS * dt)) { this.aiStrip(d, c, front, dribbling); if (this.state !== 'live' || this.ball.holder !== c) return; continue; }
+          }
+          if (dist > 1.0) continue;
           let rate = d.team.ai.aggr * (exposed ? (lineD < 8 ? 0.26 : 0.1) : 0.07) * (behind ? 0.4 : 1) * (d.team.ai.pressing ? 1.7 : 1);
           if (lineD > R.LINE_6 && lineD < 9 && exposed) rate *= 0.6;
           if (Math.random() < 1 - Math.exp(-rate * dt)) { this.tryStealBy(d); if (this.state !== 'live') return; }

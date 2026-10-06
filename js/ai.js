@@ -427,7 +427,8 @@
       }
       if (dropA && a === dropA) { const h = AI.att(opp, 3.6, clamp(ball.pos.z * 0.15, -0.8, 0.8)); tx = h.x + (a.x - h.x) * 0.25; tz = h.z + (a.z - h.z) * 0.25; }
       else if (mdrop && !isCarrier && !nearGoal) { tx += (holeHelp.x - tx) * 0.35; tz += (holeHelp.z - tz) * 0.35; }
-      tx += a.vx * 0.3; tz += a.vz * 0.3;
+      // Защитник игрока с мячом встаёт ему на путь (с упреждением по скорости), остальные — как раньше
+      tx += a.vx * (isCarrier ? 0.55 : 0.3); tz += a.vz * (isCarrier ? 0.55 : 0.3);
       // Попал в заслон — застрял у заслоняющего
       if (d.screenT > 0) { tx = d.x; tz = d.z; }
       d.target = { x: tx, z: tz };
