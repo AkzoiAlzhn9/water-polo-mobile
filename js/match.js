@@ -230,6 +230,7 @@
       for (const t of this.teams) {
         let i = 0;
         for (const p of t.players) {
+          p.celebT = null;
           if (!p.active) continue;
           p.action = null;
           if (p.isGK) { p.target = { x: -t.dir * (R.HALF_L - 0.6), z: 0 }; continue; }
@@ -913,6 +914,37 @@
       }
     }
 
+    // Отбор одним нажатием: если ведущий плывёт на тебя (спереди/сбоку) — чистый вынос с теми же шансами, что у ИИ,
+    // промах без фола; если соперник стоит с мячом или ты сзади — как раньше (рискованно, часто фол)
+    humanStrip(def, id) {
+      const c = this.ball.holder;
+      if (!c || c.team === def.team || def.stealCD > 0) { this.tryStealBy(def); return; }
+      const dist = Math.hypot(c.x - def.x, c.z - def.z);
+      if (dist > 1.3) { this.tryStealBy(def); return; }
+      const gvx = c.team.dir * R.HALF_L - c.x, gvz = -c.z, gl = Math.hypot(gvx, gvz) || 1;
+      const behind = ((def.x - c.x) * gvx + (def.z - c.z) * gvz) / (gl * dist) < -0.3;
+      const sp = Math.hypot(c.vx, c.vz);
+      const mvx = sp > 0.3 ? c.vx / sp : Math.cos(c.heading), mvz = sp > 0.3 ? c.vz / sp : Math.sin(c.heading);
+      const front = ((def.x - c.x) * mvx + (def.z - c.z) * mvz) / dist > 0.2;
+      const dribbling = c.holdMode === 'dribble' || sp > 0.8;
+      if (behind || !dribbling) { this.tryStealBy(def); return; }
+      def.stealCD = 0.8;
+      def.action = { type: 'steal', t: 0, dur: 0.35 };
+      let p = (front ? 0.45 : 0.28) + (def.attrs.def - c.attrs.pas) / 250 - (c.attrs.str - 80) / 500;
+      if (this.shielded(c, def)) p *= 0.5;
+      p = clamp(p, 0.1, 0.75);
+      if (Math.random() < p) {
+        c.action = null;
+        this.catchBall(def, 'steal');
+        def.team.stats.steals++; def.stats.steals++;
+        this.announce('ЧИСТЫЙ ВЫНОС', def.name + ' забирает мяч у ' + c.name + ' без фола', 'goal');
+        WP.Audio.crowd('cheer');
+      } else {
+        def.stunT = 0.4;
+        this.emit('passinfo', { msg: front ? 'Не дотянулся — соперник убрал мяч' : 'Сбоку сложнее — встань у него на пути' });
+      }
+    }
+
     cleanStrip(def, id) {
       const c = this.ball.holder;
       def.action = { type: 'steal', t: 0, dur: 0.35 };
@@ -1158,7 +1190,7 @@
               const gap = this.t - cb.t; cb.stage = 0;
               if (gap >= 0.1 && gap <= 0.4) this.cleanStrip(p, id);
               else this.emit('combo', { id, stage: 0, fail: true, msg: 'Слишком быстро — нужен ритм' });
-            } else this.tryStealBy(p);
+            } else this.humanStrip(p, id);
           }
           if (inp.timeout && rs && rs.team === team) this.callTimeout(team);
         }
@@ -1281,6 +1313,8 @@
       for (const team of this.teams) {
         team.aiAcc += dt;
         if (team.aiAcc > 0.15) { AI.teamThink(this, team, team.aiAcc); team.aiAcc = 0; }
+        // Пока празднуют гол, партнёры плывут к забившему, а не на позиции
+        if (this.state === 'goal') for (const p of team.players) if (p.celebT) { p.target = p.celebT; p.moveMode = 'sprint'; }
         for (const b of team.bench) b.stamina = Math.min(1, b.stamina + 0.02 * dt);
       }
       const h = this.ball.holder;
@@ -1762,6 +1796,17 @@
       if (f && f.penalty) team.stats.penGoals++;
       if (f && f.saveCounted) { const gk = team.opp.gk; if (gk) { gk.stats.saves--; team.opp.stats.saves--; } }
       if (scorer) { scorer.stats.goals++; scorer.action = { type: 'celebrate', t: 0, dur: 2.6 }; }
+      // Партнёры подплывают к забившему и празднуют вместе; пропустивший вратарь опускается в воду
+      for (const t of this.teams) for (const q of t.players) q.celebT = null;
+      if (scorer && !this.so) {
+        for (const q of team.players) {
+          if (q === scorer || !q.active || q.isGK || Math.hypot(q.x - scorer.x, q.z - scorer.z) > 7) continue;
+          const a = Math.atan2(q.z - scorer.z, q.x - scorer.x);
+          q.celebT = { x: scorer.x + Math.cos(a) * 0.95, z: scorer.z + Math.sin(a) * 0.95 }; q.target = q.celebT; q.moveMode = 'sprint'; q.faceTo = scorer;
+          q.action = { type: 'celebrate', t: -rnd(0.25, 0.7), dur: 2.3 };
+        }
+        const og = team.opp.gk; if (og && og.active) og.liftTarget = 0.12;
+      }
       if (f && f.assist && f.assist !== scorer && f.assist.team === team) f.assist.stats.assists = (f.assist.stats.assists || 0) + 1;
       if (team.ai.phaseT < 6 && !pp && f && f.type === 'shot' && !f.penalty) team.stats.counterGoals++;
       WP.Audio.whistle('double'); WP.Audio.cheer(team === this.teams[0]); this.world.cheer(true);
