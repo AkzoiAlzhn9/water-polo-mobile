@@ -44,6 +44,7 @@ WP.UI = (function () {
     renderPicks(); renderSegs();
     // Обложка: «Играть» — матч с текущими настройками, «Сменить команды» — экран настройки
     $('btnPlay').addEventListener('click', () => $('btnStart').click());
+    initFullscreen();
     $('btnSetup').addEventListener('click', () => { $('menu').dataset.view = 'setup'; });
     $('btnBack').addEventListener('click', () => { $('menu').dataset.view = 'home'; });
     $('btnStart').addEventListener('click', () => {
@@ -171,6 +172,33 @@ WP.UI = (function () {
   }
   function closeHelp() { $('help').hidden = true; }
 
+  // Весь экран на телефоне. Android: по любому нажатию кнопки, если ещё не во весь экран, и предложение установить игру
+  // как приложение. iPhone не даёт сайтам полный экран — подсказка «На экран Домой» (оттуда игра открывается без строки браузера)
+  let installEvt = null;
+  function initFullscreen() {
+    const standalone = navigator.standalone === true || (window.matchMedia && matchMedia('(display-mode: fullscreen), (display-mode: standalone)').matches);
+    const ios = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    const canFs = !!document.documentElement.requestFullscreen;
+    if (isTouch && canFs && !standalone) {
+      document.addEventListener('pointerup', (e) => { if (!document.fullscreenElement && e.target.closest && e.target.closest('button')) goLandscape(); }, true);
+    }
+    let dismissed = false;
+    try { dismissed = localStorage.getItem('polo25_pwaHint') === '1'; } catch (e) { /* без хранилища */ }
+    const show = (text, install) => {
+      if (dismissed || standalone || !isTouch) return;
+      $('pwaText').textContent = text; $('pwaInstall').hidden = !install; $('pwaHint').hidden = false;
+    };
+    $('pwaClose').addEventListener('click', () => { $('pwaHint').hidden = true; try { localStorage.setItem('polo25_pwaHint', '1'); } catch (e) { /* без хранилища */ } });
+    if (ios) show('Во весь экран на iPhone: «Поделиться» → «На экран Домой» — игра откроется как приложение, без строки браузера.', false);
+    window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt = e; show('Установи игру на телефон — она будет открываться во весь экран, как приложение.', true); });
+    $('pwaInstall').addEventListener('click', async () => {
+      if (!installEvt) return;
+      installEvt.prompt();
+      try { await installEvt.userChoice; } catch (e) { /* отменили */ }
+      installEvt = null; $('pwaHint').hidden = true;
+    });
+  }
+
   // На телефоне пробуем развернуть игру на весь экран и закрепить горизонтальную ориентацию
   function goLandscape() {
     try {
@@ -257,9 +285,12 @@ WP.UI = (function () {
   }
 
   function onEvent(kind, d) {
-    if (kind === 'card') { showCard(d); return; }
-    if (kind === 'combo') { if (!demo) showCombo(d); return; }
+    // Во время игры на экране только гол (анимация и автор) и важное про онлайн — остальные надписи мешали, особенно на телефоне
+    if (kind === 'card') { if (d.kind === 'goal') showCard(d); return; }
+    if (kind === 'combo' || kind === 'shotspeed' || kind === 'callball') return;
+    if (kind === 'banner' && d.tone !== 'goal' && !/^(ОНЛАЙН|Камера)/.test(d.title || '')) return;
     if (kind === 'passinfo') {
+      return;
       if (demo) return;
       const el = $('speed');
       if (d.msg) {

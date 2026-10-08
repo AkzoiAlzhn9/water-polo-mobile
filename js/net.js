@@ -63,9 +63,104 @@ WP.Net = (function () {
   }
   function fbSignedIn() {
     const u = fb.auth.currentUser;
-    me = { id: u.uid, name: u.displayName || 'Игрок', avatarUrl: u.photoURL || '', color: '#58c6ff' };
+    me = { id: u.uid, name: u.displayName || (u.email ? u.email.split('@')[0] : 'Игрок'), avatarUrl: u.photoURL || '', color: '#58c6ff' };
     needLogin = false;
     room = fbRoom();
+    accStart();
+  }
+
+  // ---------- аккаунт: ник и друзья (Firebase) ----------
+  // profiles/<uid> = { nick, nickLower }, nicks/<ник в нижнем регистре> = uid (ник уникален),
+  // requests/<кому>/<от кого> = { nick, t } — заявка в друзья, friends/<uid>/<друг> = { nick, t }
+  let prof = null, friends = {}, incoming = {}, accOff = [], emailMode = false;
+  const NICK_RE = /^[A-Za-zА-Яа-яЁё0-9_]{3,16}$/;
+  const TS = () => firebase.database.ServerValue.TIMESTAMP;
+  function accStart() {
+    for (const f of accOff) f();
+    accOff = []; prof = null; friends = {}; incoming = {};
+    if (!fb || !fb.auth.currentUser) return;
+    const uid = fb.auth.currentUser.uid, d = fb.db;
+    const sub = (path, fn) => { const r = d.ref(path), cb = r.on('value', (sn) => { fn(sn.val()); render(); badge(); }, () => {}); accOff.push(() => r.off('value', cb)); };
+    sub('profiles/' + uid, (v) => { prof = v || {}; if (prof.nick) { me.name = prof.nick; nameCache[uid] = prof.nick; if (room && room.presence) room.presence({ v: 1 }).catch(() => {}); } });
+    sub('friends/' + uid, (v) => { friends = v || {}; for (const k in friends) if (friends[k] && friends[k].nick) nameCache[k] = nameCache[k] || friends[k].nick; });
+    sub('requests/' + uid, (v) => { incoming = v || {}; });
+  }
+  const dbErr = (e) => /permission|PERMISSION/.test(String(e && (e.code || e.message))) ? 'База не пускает: обнови правила Firebase (новые — в database.rules.json)' : 'Ошибка: ' + ((e && (e.message || e.code)) || e);
+  async function setNick(raw) {
+    const nick = String(raw || '').trim();
+    if (!NICK_RE.test(nick)) { msg = 'Ник: от 3 до 16 букв, цифр или «_», без пробелов'; render(); return; }
+    const uid = fb.auth.currentUser.uid, low = nick.toLowerCase(), d = fb.db;
+    try {
+      // Транзакция: ник достаётся одному, даже если двое жмут «Сохранить» одновременно
+      const tr = await d.ref('nicks/' + low).transaction((cur) => (cur === null || cur === uid ? uid : undefined));
+      if (!tr.committed) { msg = 'Ник «' + nick + '» уже занят — придумай другой'; render(); return; }
+      if (prof && prof.nickLower && prof.nickLower !== low) await d.ref('nicks/' + prof.nickLower).remove().catch(() => {});
+      await d.ref('profiles/' + uid).set({ nick, nickLower: low, photo: me.avatarUrl || '', t: TS() });
+      msg = 'Готово: твой ник — ' + nick; editNick = false;
+    } catch (e) { msg = dbErr(e); }
+    render();
+  }
+  let editNick = false;
+  async function addFriend(raw, uidKnown) {
+    const uid = fb.auth.currentUser.uid, d = fb.db;
+    if (!prof || !prof.nick) { msg = 'Сначала придумай себе ник'; render(); return; }
+    let to = uidKnown || null, name = String(raw || '').trim();
+    try {
+      if (!to) {
+        if (!name) return;
+        const sn = await d.ref('nicks/' + name.toLowerCase()).get();
+        if (!sn.exists()) { msg = 'Игрока с ником «' + name + '» нет'; render(); return; }
+        to = sn.val();
+      }
+      if (to === uid) { msg = 'Это твой ник :)'; render(); return; }
+      if (friends[to]) { msg = (name || nameCache[to] || 'Он') + ' уже у тебя в друзьях'; render(); return; }
+      if (incoming[to]) { await acceptFriend(to); return; }
+      await d.ref('requests/' + to + '/' + uid).set({ nick: prof.nick, t: TS() });
+      msg = 'Заявка отправлена: ' + (name || nameCache[to] || 'игроку');
+      const inp = $('onFriend'); if (inp) inp.value = '';
+    } catch (e) { msg = dbErr(e); }
+    render();
+  }
+  async function acceptFriend(from) {
+    const uid = fb.auth.currentUser.uid, nickFrom = (incoming[from] && incoming[from].nick) || nameCache[from] || 'Друг';
+    try {
+      await fb.db.ref().update({ ['friends/' + uid + '/' + from]: { nick: nickFrom, t: TS() }, ['friends/' + from + '/' + uid]: { nick: prof.nick, t: TS() }, ['requests/' + uid + '/' + from]: null });
+      msg = nickFrom + ' теперь у тебя в друзьях';
+    } catch (e) { msg = dbErr(e); }
+    render();
+  }
+  async function declineFriend(from) { try { await fb.db.ref('requests/' + fb.auth.currentUser.uid + '/' + from).remove(); } catch (e) { msg = dbErr(e); } render(); }
+  async function removeFriend(f) {
+    const uid = fb.auth.currentUser.uid;
+    try { await fb.db.ref().update({ ['friends/' + uid + '/' + f]: null, ['friends/' + f + '/' + uid]: null }); } catch (e) { msg = dbErr(e); }
+    render();
+  }
+  // Друг в сети: его вкладка в лобби
+  const friendPeer = (fuid) => (room ? room.peers().find(p => !p.sameTab && p.by === fuid && p.presence && p.presence.v === 1) : null);
+  const authMsg = (e) => {
+    const c = (e && e.code) || '';
+    if (/operation-not-allowed|admin-restricted/.test(c)) return 'Вход по почте пока выключен — войди через Google или как гость';
+    if (c === 'auth/email-already-in-use') return 'Эта почта уже зарегистрирована — нажми «Войти»';
+    if (c === 'auth/weak-password') return 'Пароль — минимум 6 символов';
+    if (c === 'auth/invalid-email') return 'Проверь почту — в ней ошибка';
+    if (/invalid-credential|wrong-password|user-not-found|invalid-login/.test(c)) return 'Неверная почта или пароль';
+    if (c === 'auth/too-many-requests') return 'Слишком много попыток — подожди пару минут';
+    return 'Не получилось: ' + ((e && e.message) || c);
+  };
+  async function emailAuth(register) {
+    if (!fb) return;
+    const email = (($('onEmail') || {}).value || '').trim(), pass = ($('onPass') || {}).value || '';
+    if (!email || !pass) { msg = 'Введи почту и пароль'; render(); return; }
+    try { if (register) await fb.auth.createUserWithEmailAndPassword(email, pass); else await fb.auth.signInWithEmailAndPassword(email, pass); }
+    catch (e) { msg = authMsg(e); render(); return; }
+    msg = register ? 'Аккаунт создан — придумай ник' : '';
+    fbSignedIn(); await loadStats(); lobbyUnsub = null; start(); render();
+  }
+  async function resetPass() {
+    const email = (($('onEmail') || {}).value || '').trim();
+    if (!email) { msg = 'Впиши почту — пришлём письмо для смены пароля'; render(); return; }
+    try { await fb.auth.sendPasswordResetEmail(email); msg = 'Письмо для смены пароля отправлено на ' + email; } catch (e) { msg = authMsg(e); }
+    render();
   }
   async function login() {
     if (!fb) return;
@@ -95,14 +190,14 @@ WP.Net = (function () {
     }
     fbSignedIn(); await loadStats(); lobbyUnsub = null; start(); render();
   }
-  async function logout() { if (fb) { await fb.auth.signOut(); location.reload(); } }
+  async function logout() { if (fb) { for (const f of accOff) f(); accOff = []; await fb.auth.signOut(); location.reload(); } }
   // Комната: rooms/<имя>/peers/<вкладка> = { by, name, photo, p: присутствие }; узел сам удаляется при обрыве связи
   function fbRoom() {
     const fdb = fb.db, u = fb.auth.currentUser, self = Math.random().toString(36).slice(2, 12);
     function api(name) {
       const base = fdb.ref('rooms/' + name + '/peers'), mine = base.child(self);
       let pres = {}, peersMap = new Map(), snap = null, handlers = [], pend = null, lastW = 0, alive = true;
-      const write = () => { pend = null; lastW = Date.now(); if (alive) mine.set({ by: u.uid, name: u.displayName || '', photo: u.photoURL || '', p: pres, t: firebase.database.ServerValue.TIMESTAMP }).catch(() => {}); };
+      const write = () => { pend = null; lastW = Date.now(); if (alive) mine.set({ by: u.uid, name: (me && me.name) || u.displayName || '', photo: u.photoURL || '', p: pres, t: firebase.database.ServerValue.TIMESTAMP }).catch(() => {}); };
       // Вернулись в сеть (после WhatsApp и т.п.) — заново занимаем место в комнате
       const conn = fdb.ref('.info/connected');
       const onConn = conn.on('value', (s) => { if (s.val() === true && alive) { mine.onDisconnect().remove(); write(); } });
@@ -636,7 +731,8 @@ WP.Net = (function () {
     const b = $('btnOnline'); if (!b) return;
     const n = othersOnline().length, sub = $('onBadge');
     // Плитка «Онлайн» на обложке: строка под названием
-    if (sub) { sub.textContent = search ? 'Ищем соперника…' : n ? n + ' в сети' : 'Игра с людьми'; sub.classList.toggle('live', !!(search || n)); return; }
+    const rq = Object.keys(incoming || {}).length;
+    if (sub) { sub.textContent = search ? 'Ищем соперника…' : (n ? n + ' в сети' : '') + (rq ? (n ? ' · ' : '') + 'заявки в друзья: ' + rq : '') || 'Игра с людьми'; sub.classList.toggle('live', !!(search || n || rq)); return; }
     b.innerHTML = 'Онлайн' + (search ? ' <span class="on-badge">ищем соперника…</span>' : n ? ' <span class="on-badge">' + n + ' в сети</span>' : '');
   }
   function onLobby() {
@@ -745,18 +841,50 @@ WP.Net = (function () {
   function closeLobby() { $('online').hidden = true; }
   function render() {
     const el = $('onBody'); if (!el) return;
+    // Лобби перерисовывается от событий сети — введённый текст и курсор не должны пропадать
+    const keep = {}; el.querySelectorAll('input[id]').forEach(i => { keep[i.id] = i.value; });
+    const ae = document.activeElement, act = ae && el.contains(ae) && ae.id ? [ae.id, ae.selectionStart, ae.selectionEnd] : null;
+    renderInto(el);
+    for (const id in keep) { const i = $(id); if (i && !i.value && keep[id]) i.value = keep[id]; }
+    if (act) { const i = $(act[0]); if (i) { i.focus(); try { i.setSelectionRange(act[1], act[2]); } catch (e) { /* не текстовое поле */ } } }
+  }
+  function friendsHtml() {
+    let h = '';
+    if (!prof) return '<p class="small muted">Загружаем профиль…</p>';
+    if (!prof.nick || editNick) {
+      const sug = (prof.nick || me.name || '').replace(/[^A-Za-zА-Яа-яЁё0-9_]/g, '').slice(0, 16);
+      return '<div class="tac-sec"><div class="tac-lbl">' + (prof.nick ? 'Новый ник' : 'Придумай ник') + '</div><p class="small muted" style="margin:0 0 6px">По нику тебя найдут и добавят в друзья. 3–16 букв, цифр или «_».</p><div class="on-code"><input id="onNick" maxlength="16" autocomplete="off" placeholder="например ' + esc(sug || 'Alikhan_7') + '"' + (prof.nick ? ' value="' + esc(prof.nick) + '"' : '') + '><button class="btn primary" data-net="setnick">Сохранить</button></div></div>';
+    }
+    const ids = Object.keys(friends), reqs = Object.keys(incoming);
+    const ST = { menu: 'в меню', wait: 'ждёт соперника', play: 'в матче', solo: 'играет один', search: 'ищет соперника' };
+    h += '<div class="tac-sec"><div class="tac-lbl">Друзья · ' + ids.length + '</div>';
+    for (const f of reqs) h += '<div class="on-game req"><span class="on-dot"></span><span><b>' + esc((incoming[f] && incoming[f].nick) || 'Игрок') + '</b><small>хочет добавить тебя в друзья</small></span><button class="btn small primary" data-net="facc" data-v="' + esc(f) + '">Принять</button><button class="btn small" data-net="fdec" data-v="' + esc(f) + '">×</button></div>';
+    const rows = ids.map(f => ({ f, peer: friendPeer(f), nick: nameCache[f] || (friends[f] && friends[f].nick) || 'Друг' })).sort((a, b) => (b.peer ? 1 : 0) - (a.peer ? 1 : 0) || a.nick.localeCompare(b.nick));
+    for (const r of rows) {
+      const pr = r.peer && r.peer.presence, free = pr && !pr.busy && pr.st !== 'play' && !(game && game.phase === 'play');
+      h += '<div class="on-game"><span class="on-dot' + (r.peer ? '' : ' off') + '"></span><span><b>' + esc(r.nick) + '</b><small>' + (pr ? (ST[pr.q ? 'search' : pr.st === 'play' || pr.busy ? 'play' : pr.host ? 'wait' : pr.st] || 'в игре') : 'не в сети') + '</small></span>' +
+        (free ? '<button class="btn small primary" data-net="invite" data-v="' + esc(r.peer.peer) + '">Позвать на матч</button>' : '') +
+        '<button class="btn small" data-net="funf" data-v="' + esc(r.f) + '" title="Убрать из друзей">×</button></div>';
+    }
+    if (!ids.length && !reqs.length) h += '<p class="small muted">Пока никого. Впиши ник друга или нажми «+» рядом с игроком в сети.</p>';
+    h += '<div class="on-code"><input id="onFriend" maxlength="16" autocomplete="off" placeholder="ник друга"><button class="btn" data-net="fadd">Добавить</button></div>';
+    h += '<p class="small muted" style="margin:6px 0 0">Твой ник: <b>' + esc(prof.nick) + '</b> · <button class="linkish" data-net="nickedit">изменить</button></p></div>';
+    return h;
+  }
+  function renderInto(el) {
     const T = teamDef(pref.team);
     let h = '';
     if (!ready) h += '<p class="muted">Подключаемся…</p>';
     // Аккаунт
     if (ready && needLogin) {
-      h += '<div class="on-acc"><div><b>Войди, чтобы играть онлайн</b><small>Через Google — имя и фото возьмутся из аккаунта, статистика сохранится. Без входа — сыграешь как «Гость».</small></div></div><div class="row-btns"><button class="btn primary" data-net="login">Войти через Google</button><button class="btn" data-net="anon">Играть без входа</button></div>';
+      h += '<div class="on-acc"><div><b>Войди, чтобы играть онлайн</b><small>Аккаунт сохраняет ник, друзей и статистику. Через Google — в одно нажатие, по почте — с паролем. Без входа — сыграешь как «Гость».</small></div></div><div class="row-btns"><button class="btn primary" data-net="login">Войти через Google</button><button class="btn" data-net="email">Почта и пароль</button><button class="btn" data-net="anon">Играть без входа</button></div>';
+      if (emailMode) h += '<div class="on-form"><input id="onEmail" type="email" autocomplete="email" placeholder="почта"><input id="onPass" type="password" autocomplete="current-password" placeholder="пароль (от 6 символов)"><div class="row-btns"><button class="btn primary" data-net="esign">Войти</button><button class="btn" data-net="ereg">Зарегистрироваться</button><button class="btn small" data-net="ereset">Забыли пароль?</button></div></div>';
       if (msg) h += '<p class="tac-msg">' + esc(msg) + '</p>';
       el.innerHTML = h; return;
     }
     if (me && (me.name || me.id)) {
       h += '<div class="on-acc">' + (me.avatarUrl ? '<img alt="" referrerpolicy="no-referrer" src="' + esc(me.avatarUrl) + '">' : '<span class="on-av" style="background:' + esc(me.color) + '"></span>') +
-        '<div><b>' + esc(me.name || 'Вы') + '</b><small>' + (fb ? (fb.auth.currentUser && fb.auth.currentUser.isAnonymous ? 'Гость, без входа' : 'Вход через Google') : 'Вход через аккаунт claude.ai') + ' · онлайн: ' + stats.w + ' побед, ' + stats.d + ' ничьих, ' + stats.l + ' поражений</small></div>' + (fb ? '<button class="btn small" data-net="logout">Выйти</button>' : '') + '</div>';
+        '<div><b>' + esc(me.name || 'Вы') + '</b><small>' + (fb ? (fb.auth.currentUser && fb.auth.currentUser.isAnonymous ? 'Гость, без входа' : fb.auth.currentUser && fb.auth.currentUser.providerData && fb.auth.currentUser.providerData[0] && fb.auth.currentUser.providerData[0].providerId === 'password' ? 'Вход по почте' : 'Вход через Google') : 'Вход через аккаунт claude.ai') + ' · онлайн: ' + stats.w + ' побед, ' + stats.d + ' ничьих, ' + stats.l + ' поражений</small></div>' + (fb ? '<button class="btn small" data-net="logout">Выйти</button>' : '') + '</div>';
     } else if (ready && window.claude && window.claude.use) {
       h += '<div class="on-acc warn"><div><b>Вход не выполнен</b><small>Онлайн-матчи доступны тем, кто вошёл в claude.ai и кого владелец пригласил в игру по почте.</small></div></div>';
     }
@@ -769,6 +897,7 @@ WP.Net = (function () {
         : '<p class="tac-msg">Онлайн работает только в версии игры на claude.ai (не в локальном файле).</p>';
       el.innerHTML = h; return;
     }
+    if (fb && room) h += friendsHtml();
     // Кто сейчас в сети (помогает понять, видите ли вы друг друга)
     if (room) {
       const others = othersOnline();
@@ -776,7 +905,8 @@ WP.Net = (function () {
       h += '<div class="tac-sec"><div class="tac-lbl">Сейчас в сети · ' + (others.length + 1) + '</div>' + (others.length ? others.slice(0, 20).map(p => {
         const pr = p.presence, free = !pr.busy && pr.st !== 'play' && !(game && game.phase === 'play');
         return '<div class="on-game"><span class="on-dot"></span><span><b>' + esc(p.isMe ? 'Ты (другое устройство)' : peerName(p)) + '</b><small>' + (ST[pr.q ? 'search' : pr.st === 'play' || pr.busy ? 'play' : pr.host ? 'wait' : pr.st] || 'в игре') + '</small></span>' +
-          (free ? '<button class="btn small primary" data-net="invite" data-v="' + esc(p.peer) + '">Позвать на матч</button>' : '') + '</div>';
+          (free ? '<button class="btn small primary" data-net="invite" data-v="' + esc(p.peer) + '">Позвать на матч</button>' : '') +
+          (fb && prof && prof.nick && p.by && !p.isMe && !friends[p.by] ? '<button class="btn small" data-net="fpeer" data-v="' + esc(p.by) + '" title="Добавить в друзья">+</button>' : '') + '</div>';
       }).join('') + (others.length > 20 ? '<p class="small muted">и ещё ' + (others.length - 20) + '</p>' : '') : '<p class="small muted">Пока никого. Попроси друга открыть игру — он появится здесь, и его можно будет позвать на матч без кодов.</p>') + '</div>';
     }
     // Ожидание соперника
@@ -820,6 +950,17 @@ WP.Net = (function () {
       if (a === 'copy') copyCode();
       if (a === 'login') login();
       if (a === 'anon') loginAnon();
+      if (a === 'email') { emailMode = !emailMode; msg = ''; render(); }
+      if (a === 'esign') emailAuth(false);
+      if (a === 'ereg') emailAuth(true);
+      if (a === 'ereset') resetPass();
+      if (a === 'setnick') setNick(($('onNick') || {}).value);
+      if (a === 'nickedit') { editNick = true; msg = ''; render(); }
+      if (a === 'fadd') addFriend(($('onFriend') || {}).value);
+      if (a === 'fpeer') addFriend('', b.dataset.v);
+      if (a === 'facc') acceptFriend(b.dataset.v);
+      if (a === 'fdec') declineFriend(b.dataset.v);
+      if (a === 'funf') removeFriend(b.dataset.v);
       if (a === 'quick') quickStart();
       if (a === 'qstop') quickStop();
       if (a === 'logout') logout();
