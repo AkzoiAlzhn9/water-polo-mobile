@@ -471,7 +471,7 @@ WP.Net = (function () {
     const s = {
       q: ++game.seq, t: r2(m.t), st: STATES.indexOf(m.state), cl: Math.round(m.clock * 10) / 10, sc: Math.round(m.shotClock * 10) / 10, pe: m.period,
       sco: [m.teams[0].score, m.teams[1].score], po: m.possession ? m.teams.indexOf(m.possession) : -1,
-      b: [r2(b.pos.x), r2(b.pos.y), r2(b.pos.z), h ? m.teams.indexOf(h.team) : -1, h ? h.num : 0],
+      b: [r2(b.pos.x), r2(b.pos.y), r2(b.pos.z), h ? m.teams.indexOf(h.team) : -1, h ? h.num : 0, r2(b.vel.x), r2(b.vel.y), r2(b.vel.z)],
       c1: m.controlled.p1 ? m.controlled.p1.num : 0, c2: m.controlled.p2 ? m.controlled.p2.num : 0,
       to: [m.teams[0].timeouts, m.teams[1].timeouts], p: P,
       ia: game.ia || 0, s2: m.controlled.p2 ? r2(m.controlled.p2.stamina) : 1,
@@ -505,6 +505,9 @@ WP.Net = (function () {
     if (!(s.q > game.seq)) return;
     const now = performance.now();
     game.seq = s.q; game.buf.push({ at: now, s }); if (game.buf.length > 10) game.buf.shift();
+    // Как часто и как ровно приходят снимки — от этого зависит, насколько можно сократить задержку картинки
+    if (game.lastArr) { const iv = Math.min(500, now - game.lastArr); game.ivl = game.ivl ? game.ivl * 0.9 + iv * 0.1 : iv; game.jit = game.jit !== undefined ? game.jit * 0.9 + Math.abs(iv - game.ivl) * 0.1 : 10; }
+    game.lastArr = now;
     if (s.ia && game.sentAt[s.ia] && s.ia !== game.iaSeen) { game.iaSeen = s.ia; rttAdd(now - game.sentAt[s.ia]); }
   }
   function rttAdd(v) { if (game && v > 0 && v < 5000) game.rtt = game.rtt ? game.rtt * 0.85 + v * 0.15 : v; }
@@ -642,7 +645,9 @@ WP.Net = (function () {
   // Рисуем с задержкой ~100 мс между двумя снимками — движение плавное даже при неровной сети
   function applyBuffered(m) {
     const buf = game.buf; if (!buf.length) return;
-    const rt = performance.now() - 100;
+    // Буфер подстраивается: по прямому соединению ~50 мс, по неровной сети больше (без рывков)
+    game.delay = Math.max(45, Math.min(120, (game.ivl || 40) * 1.3 + (game.jit || 10) * 2.5));
+    const rt = performance.now() - game.delay;
     let a = buf[0], b = buf[buf.length - 1], k = 1;
     for (let i = buf.length - 1; i > 0; i--) { if (buf[i - 1].at <= rt) { a = buf[i - 1]; b = buf[i]; k = Math.max(0, Math.min(1, (rt - a.at) / Math.max(1, b.at - a.at))); break; } }
     applySnap(m, a.s, b.s, k);
@@ -661,11 +666,15 @@ WP.Net = (function () {
   }
   function applySnap(m, sa, sb, k) {
     syncRosters(m, sb);
+    const liveNow = STATES[sb.st] === 'live';
+    const lead = liveNow ? Math.min(0.15, (game.delay || 100) / 1000 * 0.6 + (game.rtt || 0) / 2000 * 0.5) : 0;
     const rowsA = {}; for (const r of sa.p) rowsA[r[0] * 100 + r[1]] = r;
     for (const r of sb.p) {
       const t = m.teams[r[0]], p = t.players.find(q => q.num === r[1]); if (!p) continue;
       const o = rowsA[r[0] * 100 + r[1]] || r;
       p.x = o[2] + (r[2] - o[2]) * k; p.z = o[3] + (r[3] - o[3]) * k;
+      // Упреждение по скорости: картинка у гостя почти не отстаёт от хозяина (в паузах игры — без упреждения)
+      if (lead > 0) { p.x += r[6] * lead; p.z += r[7] * lead; }
       p.heading = angLerp(o[4], r[4], k); p.lift = o[5] + (r[5] - o[5]) * k;
       p.vx = r[6]; p.vz = r[7];
       const f = r[12];
@@ -679,7 +688,14 @@ WP.Net = (function () {
     }
     // Мяч
     const ball = m.ball, ba = sa.b, bb = sb.b;
-    const x = ba[0] + (bb[0] - ba[0]) * k, y = ba[1] + (bb[1] - ba[1]) * k, z = ba[2] + (bb[2] - ba[2]) * k;
+    let x = ba[0] + (bb[0] - ba[0]) * k, y = ba[1] + (bb[1] - ba[1]) * k, z = ba[2] + (bb[2] - ba[2]) * k;
+    // Летящий мяч — по самому свежему снимку, досчитанный до «сейчас» с гравитацией: прилетает вовремя
+    const last = game.buf[game.buf.length - 1], lb = last && last.s.b;
+    if (liveNow && lb && lb[3] < 0 && lb.length >= 8) {
+      const age = Math.min(0.25, (performance.now() - last.at) / 1000 + (game.rtt || 0) / 2000 * 0.5);
+      x = lb[0] + lb[5] * age; z = lb[2] + lb[7] * age;
+      y = Math.max(0.07, lb[1] + lb[6] * age - 4.9 * age * age);
+    }
     ball.vel.set((x - ball.pos.x) * 60, (y - ball.pos.y) * 60, (z - ball.pos.z) * 60);
     ball.pos.set(x, y, z);
     if (bb[3] >= 0) { const hp = m.teams[bb[3]].players.find(q => q.num === bb[4]); ball.holder = hp || null; ball.state = hp ? 'held' : 'free'; }
@@ -706,6 +722,8 @@ WP.Net = (function () {
       if (p) m.emit('card', { kind: sb.cd[1], player: p, team: t, extra: sb.cd[4], reason: sb.cd[5] });
     }
     if (st !== game.prevSt) {
+      // Хозяин начал следующий период — у гостя закрываем экран перерыва (раньше он так и висел)
+      if (game.prevSt === 'break' && st !== 'break' && st !== 'final') m.emit('resume', {});
       if (st === 'break') { WP.Audio.horn(); m.state = st; m.emit('break', { period: m.period, shootout: false, net: true }); }
       if (st === 'final' && game.prevSt !== null) { WP.Audio.horn(); m.state = st; m.emit('final', {}); saveResult(sb.sco[1], sb.sco[0]); }
       game.prevSt = st;

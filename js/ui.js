@@ -285,6 +285,7 @@ WP.UI = (function () {
   }
 
   function onEvent(kind, d) {
+    if (kind === 'resume') { $('brk').hidden = true; return; }
     // Во время игры на экране только гол (анимация и автор) и важное про онлайн — остальные надписи мешали, особенно на телефоне
     if (kind === 'card') { if (d.kind === 'goal') showCard(d); return; }
     if (kind === 'combo' || kind === 'shotspeed' || kind === 'callball') return;

@@ -269,13 +269,19 @@
     cock: { rs: 3.4, ra: 0.3, re: 0.55, yaw: 0.5, pitch: -0.14 },
     fwd: { rs: 2.2, ra: 0.15, re: 0.12, yaw: -0.45, pitch: 0.28 },
     shot: { rs: 3.45, ra: 0.3, re: 0.62, yaw: 0.6, pitch: -0.15 }, // замах на бросок: чуть глубже, чем в каче
+    // Маленький кач наверху: рука почти не уходит назад, короткий кивок предплечьем вперёд
+    scock: { rs: 3.12, ra: 0.3, re: 0.45, yaw: 0.4, pitch: -0.1 },
+    sfwd: { rs: 2.72, ra: 0.24, re: 0.15, yaw: 0.05, pitch: 0.06 },
   };
   const eio = (u) => u * u * (3 - 2 * u), eout = (u) => 1 - (1 - u) * (1 - u) * (1 - u);
-  function pumpPhase(k) {
-    if (k < 0.18) return { a: PUMP.ready, b: PUMP.cock, u: eio(k / 0.18), f: -0.4 * eio(k / 0.18) };
-    if (k < 0.42) { const u = eout((k - 0.18) / 0.24); return { a: PUMP.cock, b: PUMP.fwd, u, f: -0.4 + 1.4 * u }; }
-    if (k < 0.56) return { a: PUMP.fwd, b: PUMP.fwd, u: 0, f: 1 };
-    const u = eio((k - 0.56) / 0.44); return { a: PUMP.fwd, b: PUMP.ready, u, f: 1 - u };
+  // Фазы кача; small — маленький кач наверху. drive — насколько сейчас работают ноги и корпус (0…1, пик на выбросе)
+  function pumpPhase(k, small) {
+    const C = small ? PUMP.scock : PUMP.cock, F = small ? PUMP.sfwd : PUMP.fwd, sc = small ? 0.5 : 1;
+    const drive = Math.sin(Math.PI * Math.max(0, Math.min(1, (k - 0.12) / 0.5)));
+    if (k < 0.18) return { a: PUMP.ready, b: C, u: eio(k / 0.18), f: -0.4 * sc * eio(k / 0.18), drive };
+    if (k < 0.42) { const u = eout((k - 0.18) / 0.24); return { a: C, b: F, u, f: (-0.4 + 1.4 * u) * sc, drive }; }
+    if (k < 0.56) return { a: F, b: F, u: 0, f: sc, drive };
+    const u = eio((k - 0.56) / 0.44); return { a: F, b: PUMP.ready, u, f: (1 - u) * sc, drive };
   }
 
   function angNorm(a) { while (a > Math.PI) a -= TAU; while (a < -Math.PI) a += TAU; return a; }
@@ -497,7 +503,7 @@
         else if (style === 'back') { f = -0.1 * k; lat = (0.25 + 0.2 * k) * hh; y = by + 0.45 * hh; }
         else { const ez = k * k * (3 - 2 * k); f = 0.08 - 0.42 * ez; y = by + (0.62 + 0.02 * ez) * hh; }
       } else if (a && a.type === 'fake') {
-        const q = pumpPhase(Math.min(1, a.t / a.dur)).f;
+        const q = pumpPhase(Math.min(1, a.t / a.dur), a.small).f;
         f = -0.12 + 0.45 * q; lat = (0.215 - 0.05 * Math.max(0, q)) * this.bw * hh; y = by + (0.8 - 0.06 * Math.max(0, q)) * hh;
       }
       out.set(this.x + c * f - s * lat, y, this.z + s * f + c * lat);
@@ -626,10 +632,14 @@
             fast = true;
             break;
           }
-          case 'fake': { // кач: мяч уходит за голову, резкий выброс вперёд перед лицом, жёсткая остановка, возврат на изготовку
-            const ph = pumpPhase(k);
+          case 'fake': { // кач всем телом (как учат тренеры): ноги выталкивают корпус вверх, корпус и плечо идут вперёд, голова кивает на ворота
+            const ph = pumpPhase(k, act.small), big = act.small ? 0.45 : 1;
             for (const key in PUMP.ready) T[key] = ph.a[key] + (ph.b[key] - ph.a[key]) * ph.u;
-            // Свободная рука держит равновесие под водой
+            T.y += 0.075 * big * ph.drive;                       // толчок ногами — корпус выше из воды
+            T.hrs += 0.3 * big * ph.drive; T.hls += 0.3 * big * ph.drive * 0.8;
+            T.hrk -= 0.5 * big * ph.drive; T.hlk -= 0.45 * big * ph.drive;
+            act.nod = 0.32 * big * ph.drive;                     // кивок головой вперёд на выбросе
+            // Свободная рука гребёт под водой и держит равновесие
             T.ls = 1.15 + 0.1 * Math.sin(t * 9); T.la = 0.8; T.le = 0.55;
             fast = true;
             break;
@@ -705,7 +715,7 @@
       }
       rig.body.rotation.order = 'YXZ';
       rig.body.rotation.set(roll, j.yaw, -(j.pitch - gF * 0.6));
-      rig.neck.rotation.z = j.pitch * (0.85 + 0.12 * this.swimK); // в кроле голова над водой, взгляд вперёд
+      rig.neck.rotation.z = j.pitch * (0.85 + 0.12 * this.swimK) + (act && act.type === 'fake' ? act.nod || 0 : 0); // в кроле голова над водой; в каче — кивок
       if (ball) {
         // С мячом смотрит вперёд (на ворота/партнёра), без мяча — следит за мячом
         const a = this.hasBall ? this.heading : Math.atan2(ball.pos.z - this.z, ball.pos.x - this.x);

@@ -681,7 +681,9 @@
       const pause = p.pumpN >= 1 && p.pumpGap > 0 && gap - p.pumpGap > 0.25;
       p.pumpGap = p.pumpN >= 1 ? gap : 0;
       p.pumpN = (p.pumpN || 0) + 1;
-      p.action = { type: 'fake', t: 0, dur: 0.42 };
+      // Кач надо разнообразить (иначе вратарь читает): первый — всем телом, дальше чередуются большие и маленькие наверху
+      const small = p.pumpN > 1 && Math.random() < 0.5;
+      p.action = { type: 'fake', t: 0, dur: small ? 0.3 : 0.44, small };
       p.holdMode = 'hold';
       p.lastFakeT = this.t;
       // Ноги устают: после третьего кача игрок проседает
@@ -696,6 +698,7 @@
         let pb = 0.17 + 0.45 * (1 - gk.attrs.gk / 100) + (p.attrs.acc - 80) / 400 + (p.attrs.sht - 80) / 500;
         pb *= clamp(p.lift / 1.05, 0.55, 1);
         if (rhythmic) pb *= 0.3;
+        pb *= p.action && p.action.small ? 0.8 : 1.15; // кач всем телом убедительнее
         if (pause) pb *= 1.25;
         pb *= Math.pow(0.8, Math.max(0, p.pumpN - 1));
         if (recent) pb *= 0.4;
