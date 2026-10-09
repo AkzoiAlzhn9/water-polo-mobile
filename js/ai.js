@@ -668,6 +668,15 @@
       gk.gkHand.z += (tz - gk.z) * k;
       gk.gkHand.y += ((info.aimY !== undefined ? info.aimY : 0.6) - gk.gkHand.y) * k;
     }
+    // Пенальти с 5 м: вратарь не успевает «прочитать» бросок — либо угадывает, либо нет (в жизни забивают ~3 из 4)
+    if (info.penalty && !info.pick) { gk.save.react += 0.09; gk.save.ls *= 0.75; gk.save.hs *= 0.85; gk.save.err += 0.1; }
+    // Пенальти: человек выбрал угол — вратарь прыгает туда сразу и в полную силу, мяч уже не «читает»
+    if (info.pick) {
+      const pk = info.pick, py = pk.h === 'high' ? 0.8 : pk.h === 'low' ? 0.2 : 0.5;
+      gk.save.commit = { y: py, z: pk.side * 1.12 * R.GOAL_HALF_W / 1.5 };
+      gk.save.react = 0.06; gk.save.ls *= 1.12; gk.save.hs *= 0.95; gk.save.err = 0.07;
+      gk.gkHand.set(gk.x + dir * 0.12, 0.55 + 0.3 * (py - 0.5), gk.z);
+    }
     gk.action = { type: 'dive', t: 0, dur: 1.3 };
     // Купившийся на кач вратарь опускается в воду — выпрыгнуть заново он не успевает
     gk.liftTarget = gk.biteT > 0 ? 0.3 : 1.1;
@@ -690,6 +699,7 @@
       s.reT = (s.reT || 0) - dt;
       if (s.reT <= 0) { s.pred = null; s.reT = 0.12; }
     }
+    if (!s.pred && s.commit) s.pred = new THREE.Vector3(gk.x + dir * 0.1, s.commit.y, s.commit.z);
     if (!s.pred) {
       const planeX = gk.x + dir * 0.1;
       const p = ball.pos.clone(), v = ball.vel.clone();
@@ -709,7 +719,8 @@
     }
     const want = clamp(s.pred.z - gk.z, -1.0, 1.0) * 0.6;
     const step = clamp(want, -s.ls * dt, s.ls * dt);
-    gk.z = clamp(gk.z + step, s.z0 - WP.GKT.lunge, s.z0 + WP.GKT.lunge);
+    const lun = s.commit ? WP.GKT.lunge + 0.15 : WP.GKT.lunge; // прыжок «наугад» в угол — дальше обычного выпада
+    gk.z = clamp(gk.z + step, s.z0 - lun, s.z0 + lun);
     gk.gkLunge = clamp(gk.gkLunge + step * 6, -1, 1);
     const sh = new THREE.Vector3(gk.x + dir * 0.05, 0.03 + gk.lift * 0.45 + 0.04, gk.z);
     const tgt = s.pred.clone(); tgt.x = gk.x + dir * 0.18;

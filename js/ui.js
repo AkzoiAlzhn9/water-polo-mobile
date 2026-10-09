@@ -650,6 +650,10 @@ WP.UI = (function () {
     $('netPing').hidden = !nt;
     if (nt && $('netPing').textContent !== nt) { $('netPing').textContent = nt; $('netPing').className = ni.rtt > 350 ? 'bad' : ni.rtt > 180 ? 'mid' : ''; }
     $('hint').hidden = !hint;
+    // Пенальти, ты на воротах — короткая подсказка, куда жать
+    const rsP = m.restart, gkH = m.state === 'penalty' && rsP && rsP.ready && rsP.team.opp.human === 'p1' && !m.cfg.net;
+    $('penHint').hidden = !gkH;
+    if (gkH) { const t = isTouch ? 'Ты на воротах: стик вбок — угол, вверх — высоко, вниз — низко' : 'Ты на воротах: ' + WP.Input.moveKbd() + ' — вбок угол, вперёд высоко, назад низко'; if ($('penHint').innerHTML !== t) $('penHint').innerHTML = t; }
   }
 
   // Тач-кнопки меняют подписи: с мячом — атака, без мяча — защита

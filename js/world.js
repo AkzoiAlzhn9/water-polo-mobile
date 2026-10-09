@@ -809,6 +809,13 @@
       let tp, tl;
       // Отладка: камера стоит, где поставили (WP.debug.cam)
       if (this.camOverride) { cam.position.copy(this.camOverride.pos); cam.lookAt(this.camOverride.look); return; }
+      if (this.penCam && this.camMode !== 'focus' && this.camMode !== 'replay') {
+        const pc = this.penCam;
+        tp = new THREE.Vector3(pc.gx - pc.dir * 8.6, 2.3, 0); tl = new THREE.Vector3(pc.gx, 0.45, 0);
+        pos.lerp(tp, 1 - Math.exp(-dt * 4)); look.lerp(tl, 1 - Math.exp(-dt * 6));
+        cam.position.copy(pos); cam.lookAt(look);
+        return;
+      }
       if (this.camMode === 'focus' && this.focusPlayer) {
         const p = this.focusPlayer, sd = this.focusSide || 1;
         tp = new THREE.Vector3(p.x - sd * 2.6, 1.7, p.z + 3.1);

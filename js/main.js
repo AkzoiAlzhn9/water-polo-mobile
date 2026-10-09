@@ -304,6 +304,10 @@
       const b = match.ball.pos;
       FOCUS.set(Math.max(-11, Math.min(11, b.x)), 0, Math.max(-8, Math.min(8, b.z)));
       const ht = match.teams.find(t => t.human === 'p1');
+      // Пенальти с участием человека: камера из-за спины бьющего, лицом к воротам (лево/право на экране = в воротах)
+      const rsP = match.restart;
+      if (match.state === 'penalty' && rsP && rsP.ready && (rsP.team.human || rsP.team.opp.human)) world.penCam = { gx: rsP.team.dir * WP.R.HALF_L, dir: rsP.team.dir, until: match.t + 1.8 };
+      else if (world.penCam && (match.t > world.penCam.until || match.t < world.penCam.until - 3)) world.penCam = null;
       world.updateCamera(dt, FOCUS, { dir: ht ? ht.dir : 1 });
     }
     const cv = world.canvas;

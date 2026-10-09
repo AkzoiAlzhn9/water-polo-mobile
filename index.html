@@ -98,6 +98,8 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 #pcard .pc-st i { display: block; height: 100%; background: #35c46a; transition: width .3s; }
 #pcard .pc-st i.mid { background: var(--accent); } #pcard .pc-st i.lo { background: var(--red); }
 .lineups em.me { font-style: normal; font: 700 11px var(--display); background: var(--accent); color: #1a1204; padding: 0 5px; border-radius: 3px; margin-left: 4px; }
+#penHint { position: absolute; left: 50%; bottom: calc(18px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); font: 600 13px var(--display); letter-spacing: .03em; color: #1a1204; background: rgba(255,194,58,.92); padding: 4px 12px; border-radius: 6px; white-space: nowrap; pointer-events: none; }
+@media (pointer: coarse) and (orientation: landscape) and (max-height: 540px) { #penHint { bottom: auto; top: calc(62px + env(safe-area-inset-top, 0px)); font-size: 11px; } }
 #hint { position: absolute; left: 50%; bottom: calc(16px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); font-size: 12px; color: var(--muted); background: rgba(6,18,28,.6); padding: 3px 10px; border-radius: 4px; white-space: nowrap; pointer-events: none; }
 kbd { font: 600 12px var(--display); background: rgba(255,255,255,.1); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 3px; padding: 0 5px; color: var(--text); }
 #labels { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
@@ -641,6 +643,7 @@ body.lefty.tb-large #stick { transform-origin: bottom right; }
     <div id="netPing" hidden></div>
     <div id="pcard" hidden><div class="pc-top"></div><div class="pc-at"></div><div class="pc-st" title="Запас сил"><i></i></div></div>
     <div id="hint"></div>
+    <div id="penHint" hidden></div>
   </div>
 
   <div id="replay" hidden><div class="rp-bar top"></div><div class="rp-bar bottom"></div><div class="rp-badge"><span class="rp-dot"></span><span id="rpLabel">ПОВТОР</span></div><div class="rp-skip">Пропустить — любая клавиша или тап</div></div>
@@ -803,19 +806,19 @@ body.lefty.tb-large #stick { transform-origin: bottom right; }
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.min.js"></script>
-<script src="js/data.js?v=1791576152"></script>
-<script src="js/audio.js?v=1791576152"></script>
-<script src="js/world.js?v=1791576152"></script>
-<script src="js/player.js?v=1791576152"></script>
-<script src="js/ball.js?v=1791576152"></script>
-<script src="js/ai.js?v=1791576152"></script>
-<script src="js/match.js?v=1791576152"></script>
-<script src="js/input.js?v=1791576152"></script>
-<script src="js/career.js?v=1791576152"></script>
-<script src="js/tutorial.js?v=1791576152"></script>
-<script src="js/firebase-config.js?v=1791576152"></script>
-<script src="js/net.js?v=1791576152"></script>
-<script src="js/ui.js?v=1791576152"></script>
-<script src="js/main.js?v=1791576152"></script>
+<script src="js/data.js?v=1791577771"></script>
+<script src="js/audio.js?v=1791577771"></script>
+<script src="js/world.js?v=1791577771"></script>
+<script src="js/player.js?v=1791577771"></script>
+<script src="js/ball.js?v=1791577771"></script>
+<script src="js/ai.js?v=1791577771"></script>
+<script src="js/match.js?v=1791577771"></script>
+<script src="js/input.js?v=1791577771"></script>
+<script src="js/career.js?v=1791577771"></script>
+<script src="js/tutorial.js?v=1791577771"></script>
+<script src="js/firebase-config.js?v=1791577771"></script>
+<script src="js/net.js?v=1791577771"></script>
+<script src="js/ui.js?v=1791577771"></script>
+<script src="js/main.js?v=1791577771"></script>
 
 </body></html>

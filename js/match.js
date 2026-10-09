@@ -645,7 +645,9 @@
       if (onTarget) team.stats.onTarget++;
       if (rs) { const wasPen = rs.type === 'penalty'; this.putLive(); if (wasPen && this.so) this.so.shotT = this.t; }
       const gk = opp.gk;
-      if (gk && gk.active) AI.gkSaveStart(this, gk, { screened, kind: opts.type, penalty: rs && rs.type === 'penalty', aimZ: z, aimY: opts.type === 'skip' ? 0.2 : y, shooter: p });
+      const pick = rs && rs.type === 'penalty' && this.penPick && gk && this.penPick.team === gk.team ? this.penPick : null;
+      if (gk && gk.active) AI.gkSaveStart(this, gk, { screened, kind: opts.type, penalty: rs && rs.type === 'penalty', aimZ: z, aimY: opts.type === 'skip' ? 0.2 : y, shooter: p, pick });
+      this.penPick = null; this.showPenMark(null);
       WP.Audio.whoosh();
     }
 
@@ -1449,6 +1451,33 @@
       }
     }
 
+    // Пенальти, вратарь — человек: стиком выбирает, куда прыгнуть (влево/вправо — угол, вперёд/назад — верх/низ).
+    // Выбор показывается кольцом на воротах; в момент броска вратарь прыгает туда без раздумий. Без выбора — играет сам.
+    penPickStep(rs, gk) {
+      const hid = gk && gk.team.human, inp = hid ? this.inputs[hid] : null;
+      if (!rs.ready || !gk || !hid) { this.penPick = null; this.showPenMark(null); return; }
+      if (inp && inp.mag > 0.4) {
+        const gx = rs.team.dir * R.HALF_L, toGoal = inp.x * Math.sign(gx);
+        const side = Math.abs(inp.z) > 0.35 * inp.mag ? Math.sign(inp.z) : 0;
+        const h = toGoal > 0.35 * inp.mag ? 'high' : toGoal < -0.35 * inp.mag ? 'low' : 'mid';
+        this.penPick = { team: gk.team, side, h, t: this.t };
+      }
+      this.showPenMark(this.penPick && this.penPick.team === gk.team ? this.penPick : null, rs.team.dir * R.HALF_L, rs.team.dir);
+    }
+    showPenMark(pick, gx, dir) {
+      if (!this.penMk) {
+        if (!pick) return;
+        this.penMk = new THREE.Mesh(new THREE.RingGeometry(0.15, 0.22, 28), new THREE.MeshBasicMaterial({ color: 0xffc23a, transparent: true, opacity: 0.9, side: THREE.DoubleSide, depthTest: false }));
+        this.penMk.rotation.y = Math.PI / 2; this.penMk.renderOrder = 20;
+        this.world.scene.add(this.penMk);
+      }
+      this.penMk.visible = !!pick;
+      if (!pick) return;
+      const y = pick.h === 'high' ? 0.74 : pick.h === 'low' ? 0.2 : 0.47;
+      this.penMk.position.set(gx - dir * 0.06, y, pick.side * 1.12 * R.GOAL_HALF_W / 1.5);
+      this.penMk.scale.setScalar(1 + 0.12 * Math.sin(this.t * 8));
+    }
+
     stepPenalty(dt) {
       const rs = this.restart;
       rs.t += dt;
@@ -1468,6 +1497,7 @@
         return;
       }
       rs.readyT += dt;
+      this.penPickStep(rs, gk);
       shooter.target = { x: shooter.x, z: shooter.z }; shooter.faceTo = { x: rs.team.dir * R.HALF_L, z: 0 };
       if (gk) { gk.target = { x: gk.x, z: gk.z }; gk.faceTo = shooter; }
       const human = this.isHumanActing(shooter);
