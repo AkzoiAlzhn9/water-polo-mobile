@@ -32,7 +32,7 @@
   const Z3 = [[1.9, 1.2], [1.9, -1.2], [4.4, 0]];
 
   // Параметры вратаря: скорость руки, выпада, ошибка прогноза
-  WP.GKT = { hs0: 3.4, hs1: 2.2, ls0: 1.3, ls1: 1.0, err0: 0.1, lunge: 0.7, reach: 0.85 };
+  WP.GKT = { hs0: 4.3, hs1: 2.2, ls0: 1.72, ls1: 1.0, err0: 0.07, lunge: 0.76, reach: 0.92 };
 
   AI.att = (team, dx, r) => ({ x: team.dir * (R.HALF_L - dx), z: r * team.dir });
   AI.lineD = (team, x) => (team.dir * R.HALF_L - x) * team.dir;
@@ -147,7 +147,11 @@
     else if (holderTeam || passTeam) phase = (holderTeam || passTeam) === team ? 'attack' : 'defense';
     else phase = 'loose';
     if (phase !== ai.phase) {
-      if (!(phase === 'loose' || (ai.phase === 'loose' && phase === ai.lastSolid))) ai.phaseT = 0;
+      if (!(phase === 'loose' || (ai.phase === 'loose' && phase === ai.lastSolid))) {
+        ai.phaseT = 0;
+        // Потерявшие мяч не сразу разворачиваются назад (~0,5 с) — у атакующих появляется шанс на отрыв
+        if (phase === 'defense' && match.state === 'live') ai.turnT = 0.4 + 0.25 * (1 - team.ai.aggr);
+      }
       if (phase !== 'loose') ai.lastSolid = phase;
       ai.phase = phase; ai.dirty = true;
     }
@@ -156,8 +160,9 @@
     if (match.so || match.state === 'intro' || match.state === 'sprint') return;
     if (match.state === 'dead' && match.restart && match.restart.type === 'throwoff') return;
     if (match.state === 'penalty') return;
+    if (ai.turnT > 0) ai.turnT -= dt;
     if (phase === 'attack') AI.attackTargets(match, team, field);
-    else if (phase === 'defense') AI.defenseTargets(match, team, field);
+    else if (phase === 'defense' && !(ai.turnT > 0)) AI.defenseTargets(match, team, field);
     else {
       if (ai.lastSolid === 'attack') AI.attackTargets(match, team, field); else AI.defenseTargets(match, team, field);
       AI.looseChase(match, team, field);
@@ -198,10 +203,12 @@
     const car = ball.holder && ball.holder.team === team ? ball.holder : null;
     const lanes = new Map();
     if (counter && car && !rs && AI.lineD(team, car.x) > 4.5) {
+      // Быстрый отрыв: трое самых выгодно стоящих (ближе к чужим воротам и быстрее) уходят в коридоры, мяч догоняет их пасом
       const side = car.z * team.dir > 0 ? -1 : 1;
-      const runners = field.filter(p => p !== car).sort((a, b) => AI.lineD(team, a.x) - AI.lineD(team, b.x)).slice(0, 2);
+      const runners = field.filter(p => p !== car && !p.excluded).sort((a, b) => (AI.lineD(team, a.x) - a.attrs.spd / 25) - (AI.lineD(team, b.x) - b.attrs.spd / 25)).slice(0, ai.phaseT < 5 ? 3 : 2);
       if (runners[0]) lanes.set(runners[0], AI.att(team, 2.7, side * 2.1));
-      if (runners[1]) lanes.set(runners[1], AI.att(team, 4.8, -side * 3.2));
+      if (runners[1]) lanes.set(runners[1], AI.att(team, 4.6, -side * 3.0));
+      if (runners[2]) lanes.set(runners[2], AI.att(team, 6.5, side * 0.6));
     }
     const motion = team.tac && team.tac.move === 'motion';
     AI.playStep(match, team, field, car, counter, !!rs);
@@ -248,7 +255,7 @@
       if (AI.lineD(team, tx) < 2.12 && bl > AI.lineD(team, tx)) tx = team.dir * (R.HALF_L - 2.2);
       p.target = { x: tx, z: tz };
       const far = Math.hypot(tx - p.x, tz - p.z);
-      p.moveMode = (far > 3.5 && counter) || (play && ((p === play.driver && play.phase === 'drive') || (p === play.screener && play.phase === 'set'))) ? 'sprint' : 'swim';
+      p.moveMode = (counter && (far > 2 || ai.phaseT < 4)) || (play && ((p === play.driver && play.phase === 'drive') || (p === play.screener && play.phase === 'set'))) ? 'sprint' : 'swim';
       p.faceTo = ball.pos; p.liftTarget = 0.05;
     }
   };
@@ -502,6 +509,16 @@
         if (mate) { match.doPass(p, mate, { through: mate.vx * team.dir > 1.0 && AI.lineD(team, mate.x) > 3.5 }); return; }
       }
     }
+    // Контратака: открытый партнёр убежал вперёд — длинный пас ему сразу (и от вратаря тоже)
+    if (!rs && ai.phaseT < 5 && p.holdT > 0.3 && AI.lineD(team, p.x) > 9) {
+      let best = null, bs = 0;
+      for (const t of team.players) {
+        if (t === p || !t.active || t.isGK) continue;
+        const ahead = AI.lineD(team, p.x) - AI.lineD(team, t.x), open = AI.nearestOpp(t, undefined, undefined, true).d;
+        if (ahead > 3 && open > 1.8 && AI.passScore(match, p, t) > -0.45 && ahead + open > bs) { bs = ahead + open; best = t; }
+      }
+      if (best) { match.doPass(p, best, { through: best.vx * team.dir > 0.8, power: 0.45 }); return; }
+    }
     // Карьера игрока: партнёр слышит «Дай!» и отдаёт, если линия паса не перекрыта
     const cf = team.callFor;
     if (!rs && cf && match.t - cf.t < 1.6 && cf.p !== p && cf.p.active && !cf.p.excluded && p.holdT > 0.3) {
@@ -618,7 +635,7 @@
     const dir = gk.team.dir;
     gk.save = {
       t: 0,
-      react: 0.12 + 0.12 * (1 - a / 100) + Math.random() * 0.06 + (info.screened ? 0.06 : 0) + (gk.biteT > 0 ? 0.35 : 0) + (info.penalty ? -0.02 : 0),
+      react: 0.11 + 0.12 * (1 - a / 100) + Math.random() * 0.06 + (info.screened ? 0.06 : 0) + (gk.biteT > 0 ? 0.35 : 0) + (info.penalty ? -0.02 : 0),
       pred: null, z0: gk.z, lob: info.kind === 'lob', maxY: info.kind === 'lob' ? 1.12 : 1.3, hs: WP.GKT.hs0 + WP.GKT.hs1 * a / 100, ls: WP.GKT.ls0 + WP.GKT.ls1 * a / 100, err: WP.GKT.err0 + 0.22 * (1 - a / 100) + (info.kind === 'skip' ? 0.07 : 0),
     };
     // Купился на кач: вратарь уже выпрыгнул и опускается — руки медленнее, до верхних углов не достать

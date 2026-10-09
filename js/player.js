@@ -268,6 +268,7 @@
     ready: { rs: 3.0, ra: 0.3, re: 0.35, yaw: 0.3, pitch: -0.08 },
     cock: { rs: 3.4, ra: 0.3, re: 0.55, yaw: 0.5, pitch: -0.14 },
     fwd: { rs: 2.2, ra: 0.15, re: 0.12, yaw: -0.45, pitch: 0.28 },
+    shot: { rs: 3.45, ra: 0.3, re: 0.62, yaw: 0.6, pitch: -0.15 }, // замах на бросок: чуть глубже, чем в каче
   };
   const eio = (u) => u * u * (3 - 2 * u), eout = (u) => 1 - (1 - u) * (1 - u) * (1 - u);
   function pumpPhase(k) {
@@ -401,7 +402,7 @@
       // Кроль с поднятой головой у элиты ~2,0 м/с, с мячом ~1,7 м/с, эггбитер боком ~0,9 м/с
       // Скорость решает заметно: 60 → ~1,7 м/с, 95 → ~2,05 м/с
       let v = 1.15 + 0.95 * this.attrs.spd / 100;
-      if (this.moveMode === 'sprint' && this.stamina > 0.12) v *= 1.12;
+      if (this.moveMode === 'sprint' && this.stamina > 0.12) v *= this.team.ai.phase === 'attack' && this.team.ai.phaseT < 4 && !this.hasBall ? 1.17 : 1.12;
       if (this.moveMode === 'slow') v *= 0.5;
       if (this.hasBall) v *= this.holdMode === 'hold' ? 0.48 : 0.87;
       if (this.isGK) v *= 0.72;
@@ -409,6 +410,7 @@
       // Упёрся в заслон: почти стоит, пока не обойдёт заслоняющего
       if (this.screenT > 0) v *= 0.5;
       if (this.action && (this.action.type === 'windup' || this.action.type === 'release')) v *= 0.2;
+      if (this.action && this.action.type === 'pass') v *= 0.6;
       if (this.action && this.action.type === 'block') v *= 0.45;
       if (this.action && (this.action.type === 'drawfoul' || this.action.type === 'fake')) v *= 0.4;
       if (this.stunT > 0) v *= 0.4;
@@ -547,10 +549,11 @@
       const ph = this.phase;
       const bob = 0.02 * Math.sin(ph) * (1 - K);
 
+      // Кроль ватерполиста: голова над водой, плечи высоко, корпус перекатывается с боку на бок на каждом гребке
       const T = {
-        y: (0.03 + this.lift * (this.isGK ? 0.45 : 0.37) + bob) * (1 - K) + (-0.04) * K,
-        pitch: (0.16 - this.lift * 0.1) * (1 - K) + 1.2 * K,
-        roll: 0.03 * Math.sin(t * 1.3 + this.seed) * (1 - K), yaw: 0,
+        y: (0.03 + this.lift * (this.isGK ? 0.45 : 0.37) + bob) * (1 - K) + 0.0 * K,
+        pitch: (0.16 - this.lift * 0.1) * (1 - K) + 1.05 * K,
+        roll: 0.03 * Math.sin(t * 1.3 + this.seed) * (1 - K) + 0.26 * Math.sin(ph) * K, yaw: 0,
       };
       let swR = Math.PI - (ph % TAU); let swL = swR - Math.PI;
       // Эггбитер: предплечья загребают под самой поверхностью
@@ -559,16 +562,18 @@
       swR = fix(swR, tr); swL = fix(swL, tl);
       const dribble = this.hasBall && this.holdMode === 'dribble';
       const armAb = dribble ? 0.42 : 0.2;
-      T.rs = tr * (1 - K) + swR * K; T.ra = 0.72 * (1 - K) + armAb * K;
-      T.re = (0.95 + 0.25 * Math.sin(ph + 1)) * (1 - K) + (Math.sin(swR) < 0 ? 1.2 : 0.25) * K;
-      T.ls = tl * (1 - K) + swL * K; T.la = 0.72 * (1 - K) + armAb * K;
-      T.le = (0.95 + 0.25 * Math.sin(ph + 1 + Math.PI)) * (1 - K) + (Math.sin(swL) < 0 ? 1.2 : 0.25) * K;
+      // Над водой — высокий локоть и рука в сторону (короткий «рубленый» пронос), под водой — гребок согнутой рукой
+      const recR = Math.max(0, -Math.sin(swR)), recL = Math.max(0, -Math.sin(swL));
+      T.rs = tr * (1 - K) + swR * K; T.ra = 0.72 * (1 - K) + (dribble ? armAb : 0.14 + 0.46 * recR) * K;
+      T.re = (0.95 + 0.25 * Math.sin(ph + 1)) * (1 - K) + (0.5 + 1.15 * recR) * K;
+      T.ls = tl * (1 - K) + swL * K; T.la = 0.72 * (1 - K) + (dribble ? armAb : 0.14 + 0.46 * recL) * K;
+      T.le = (0.95 + 0.25 * Math.sin(ph + 1 + Math.PI)) * (1 - K) + (0.5 + 1.15 * recL) * K;
       const eg = Math.sin(ph * 1.6), eg2 = Math.sin(ph * 1.6 + Math.PI);
-      T.hrs = (1.25 + 0.14 * eg) * (1 - K) + (0.3 * Math.sin(ph * 2.2)) * K;
-      T.hls = (1.25 + 0.14 * eg2) * (1 - K) + (0.3 * Math.sin(ph * 2.2 + Math.PI)) * K;
+      T.hrs = (1.25 + 0.14 * eg) * (1 - K) + (0.1 + 0.42 * Math.sin(ph * 2.2)) * K;
+      T.hls = (1.25 + 0.14 * eg2) * (1 - K) + (0.1 + 0.42 * Math.sin(ph * 2.2 + Math.PI)) * K;
       T.hra = 0.62 * (1 - K) + 0.1 * K; T.hla = 0.62 * (1 - K) + 0.1 * K;
-      T.hrk = (-1.6 + 0.5 * Math.cos(ph * 1.6)) * (1 - K) + (-0.35 - 0.35 * Math.max(0, Math.sin(ph * 2.2))) * K;
-      T.hlk = (-1.6 + 0.5 * Math.cos(ph * 1.6 + Math.PI)) * (1 - K) + (-0.35 - 0.35 * Math.max(0, Math.sin(ph * 2.2 + Math.PI))) * K;
+      T.hrk = (-1.6 + 0.5 * Math.cos(ph * 1.6)) * (1 - K) + (-0.2 - 0.55 * Math.max(0, Math.sin(ph * 2.2 + 0.6))) * K;
+      T.hlk = (-1.6 + 0.5 * Math.cos(ph * 1.6 + Math.PI)) * (1 - K) + (-0.2 - 0.55 * Math.max(0, Math.sin(ph * 2.2 + Math.PI + 0.6))) * K;
       let gkIK = false, ikR = null, ikL = null;
 
       // С мячом у ворот — «на изготовке», как в трансляциях: мяч высоко сбоку от головы на ладони, локоть согнут, корпус чуть развёрнут
@@ -589,12 +594,13 @@
               T.rs = 1.3 - 0.3 * kw; T.ra = 0.35; T.re = 0.9; T.ls = 1.4; T.la = 0.6; T.le = 0.5; T.pitch = 0.5;
             } else if (style === 'back') { // разворот центрового
               T.rs = 2.3 + 0.4 * kw; T.ra = 0.9; T.re = 0.4; T.yaw = -0.6 * kw; T.ls = 1.5; T.la = 0.7;
-            } else { // сверху: мяч уходит далеко за голову, корпус разворачивается, вторая рука указывает на ворота
-              const ez = kw * kw * (3 - 2 * kw);
+            } else { // сверху — как в жизни и как в каче: с изготовки мяч уходит назад-вверх, корпус заворачивается, вторая рука на ворота
+              const ez = kw * kw * (3 - 2 * kw), A = PUMP.ready, B = PUMP.shot;
               // Пока игрок держит бросок, он «качает» — мяч чуть ходит вперёд-назад
-              const pump = act.ai ? 0 : Math.max(0, act.t - 0.45) > 0 ? 0.12 * Math.sin((act.t - 0.45) * 9) : 0;
-              T.rs = 2.8 + 0.75 * ez + pump; T.ra = 0.28 - 0.12 * ez; T.re = 0.35 + 0.55 * ez; T.ls = 1.9 - 0.25 * ez; T.la = 0.45; T.le = 0.15;
-              T.yaw = 0.85 * ez; T.pitch = -0.12 * ez; T.roll = -0.12 * ez;
+              const pump = act.ai ? 0 : Math.max(0, act.t - 0.45) > 0 ? 0.1 * Math.sin((act.t - 0.45) * 9) : 0;
+              T.rs = A.rs + (B.rs - A.rs) * ez + pump; T.ra = A.ra + (B.ra - A.ra) * ez; T.re = A.re + (B.re - A.re) * ez;
+              T.yaw = A.yaw + (B.yaw - A.yaw) * ez; T.pitch = A.pitch + (B.pitch - A.pitch) * ez; T.roll = -0.12 * ez;
+              T.ls = 1.9 - 0.25 * ez; T.la = 0.45; T.le = 0.15;
             }
             break;
           case 'release':
@@ -603,13 +609,23 @@
             else if (act.style === 'back') { T.rs = 2.7 - 3.1 * Math.min(1, k * 1.6); T.ra = 0.9; T.re = 0.1; T.yaw = 0.7 * k; }
             else {
               // Хлёст: плечо, затем локоть, корпус проворачивается к воротам; рука проходит до конца, вниз и через тело
-              const w = Math.min(1, k * 2.2), f2 = Math.max(0, (k - 0.35) / 0.65), sk = act.kind === 'skip';
-              // «От воды»: рука уходит вниз к воде, корпус сильнее наклоняется вперёд
-              T.rs = 3.55 - (sk ? 2.85 : 2.45) * w - (sk ? 0.55 : 0.4) * f2; T.ra = 0.18 + 0.35 * f2; T.re = 0.9 * (1 - Math.min(1, k * 4)); T.ls = 1.2; T.la = 0.7; T.le = 0.6;
-              T.yaw = 0.85 - 1.4 * w; T.pitch = -0.1 + (sk ? 0.72 : 0.5) * w; T.roll = 0.12 * w;
+              // До выпуска — тот же выброс, что в каче (поэтому кач и похож на бросок), дальше рука проходит вниз и через тело
+              const w = eout(Math.min(1, k / 0.4)), f2 = Math.max(0, (k - 0.35) / 0.65), sk = act.kind === 'skip', B = PUMP.shot, F = PUMP.fwd;
+              T.rs = B.rs + (F.rs - B.rs) * w - (sk ? 1.5 : 1.1) * f2; T.ra = B.ra + (F.ra - B.ra) * w + 0.3 * f2; T.re = B.re + (F.re - B.re) * w + 0.23 * f2;
+              T.yaw = B.yaw + (F.yaw - B.yaw) * w - 0.3 * f2; T.pitch = B.pitch + (F.pitch - B.pitch) * w + (sk ? 0.42 : 0.17) * f2; T.roll = 0.12 * w;
+              T.ls = 1.2; T.la = 0.7; T.le = 0.6;
             }
             fast = true;
             break;
+          case 'pass': { // пас: рука от изготовки выбрасывается вперёд к партнёру и замирает, корпус смотрит на него
+            const w = eout(Math.min(1, k / 0.45)), r = Math.max(-1.1, Math.min(1.1, act.rel || 0));
+            const A = PUMP.ready, endRs = act.lob ? 2.45 : 2.0;
+            T.rs = A.rs + (endRs - A.rs) * w; T.ra = A.ra + (0.12 - A.ra) * w; T.re = A.re + (0.06 - A.re) * w;
+            T.yaw = A.yaw + (-r * 0.75 - A.yaw) * w; T.pitch = A.pitch + ((act.lob ? 0.05 : 0.16) - A.pitch) * w; T.roll = 0.05 * w;
+            T.ls = 1.25; T.la = 0.75; T.le = 0.55;
+            fast = true;
+            break;
+          }
           case 'fake': { // кач: мяч уходит за голову, резкий выброс вперёд перед лицом, жёсткая остановка, возврат на изготовку
             const ph = pumpPhase(k);
             for (const key in PUMP.ready) T[key] = ph.a[key] + (ph.b[key] - ph.a[key]) * ph.u;
@@ -689,7 +705,7 @@
       }
       rig.body.rotation.order = 'YXZ';
       rig.body.rotation.set(roll, j.yaw, -(j.pitch - gF * 0.6));
-      rig.neck.rotation.z = j.pitch * 0.85;
+      rig.neck.rotation.z = j.pitch * (0.85 + 0.12 * this.swimK); // в кроле голова над водой, взгляд вперёд
       if (ball) {
         // С мячом смотрит вперёд (на ворота/партнёра), без мяча — следит за мячом
         const a = this.hasBall ? this.heading : Math.atan2(ball.pos.z - this.z, ball.pos.x - this.x);

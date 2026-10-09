@@ -539,7 +539,9 @@
       const kmh = Math.round(vel.length() * 3.6);
       this.ball.release(vel, { type: 'pass', from: p, to, team: p.team, t: this.t, wet, power, kmh, lob, through, aim: { x: aim.x, z: aim.z } });
       this.ball.releaseT = this.t;
-      p.action = { type: 'release', t: 0, dur: 0.22 };
+      // Пас: рука выбрасывается вперёд к партнёру, корпус разворачивается к нему (угол относительно взгляда)
+      const toA = Math.atan2((spot ? spot.z : to.z) - p.z, (spot ? spot.x : to.x) - p.x);
+      p.action = { type: 'pass', t: 0, dur: high ? 0.36 : power > 0.4 ? 0.26 : 0.3, lob: high, rel: WP.angNorm(toA - p.heading) };
       p.pumpN = 0;
       if (p.ctrl) this.emit('passinfo', { kmh, power, to, kind: through ? (lob ? 'Пас в разрез верхом' : 'Пас в разрез') : lob ? 'Пас верхом' : power >= 0.6 ? 'Сильный пас' : power > 0 ? 'Резкий пас' : 'Пас' });
       // Партнёр сразу уходит на ход к точке паса
@@ -930,9 +932,10 @@
       if (behind || !dribbling) { this.tryStealBy(def); return; }
       def.stealCD = 0.8;
       def.action = { type: 'steal', t: 0, dur: 0.35 };
-      let p = (front ? 0.45 : 0.28) + (def.attrs.def - c.attrs.pas) / 250 - (c.attrs.str - 80) / 500;
+      // В жизни чисто забрать мяч у ведущего непросто: удаётся примерно каждый пятый раз спереди
+      let p = (front ? 0.22 : 0.12) + (def.attrs.def - c.attrs.pas) / 300 - (c.attrs.str - 80) / 500;
       if (this.shielded(c, def)) p *= 0.5;
-      p = clamp(p, 0.1, 0.75);
+      p = clamp(p, 0.05, 0.4);
       if (Math.random() < p) {
         c.action = null;
         this.catchBall(def, 'steal');
@@ -956,10 +959,10 @@
       const behind = ((def.x - c.x) * gvx + (def.z - c.z) * gvz) / (gl * dist) < -0.3;
       if (behind) { this.emit('combo', { id, stage: 0, fail: true, msg: 'Сзади чисто не сыграть' }); def.stealCD = 0; this.tryStealBy(def); return; }
       const exposed = c.holdMode === 'hold' || (c.action && c.action.type === 'windup');
-      let pS = (exposed ? 0.88 : 0.45) + (def.attrs.def - c.attrs.pas) / 200;
+      let pS = (exposed ? 0.55 : 0.25) + (def.attrs.def - c.attrs.pas) / 250;
       if (c.action && c.action.type === 'windup') pS += 0.06;
-      if (this.shielded(c, def)) pS -= 0.3;
-      pS = clamp(pS, 0.25, 0.95);
+      if (this.shielded(c, def)) pS -= 0.25;
+      pS = clamp(pS, 0.1, 0.7);
       if (Math.random() < pS) {
         c.action = null;
         this.catchBall(def, 'steal');
@@ -1092,7 +1095,7 @@
           // Первые 0,35 с после отбора или приёма броски не срабатывают: нажатия комбо не должны превращаться в бросок
           const fresh = this.t - (p.gainT === undefined ? -9 : p.gainT) < (p.gainHow === 'catch' ? 0.1 : 0.35);
           // Буфер: бросок, нажатый во время кача или приёма, срабатывает сразу после них
-          if (inp.shootP && p.action && ['fake', 'catch', 'drawfoul', 'release'].includes(p.action.type)) p.shootBuf = this.t;
+          if (inp.shootP && p.action && ['fake', 'catch', 'drawfoul', 'release', 'pass'].includes(p.action.type)) p.shootBuf = this.t;
           const buffered = p.shootBuf && this.t - p.shootBuf < 0.45 && inp.shootD;
           // Пас в разрез (клавиатура, геймпад): тап — сразу лучшему, держать — прицел (кольцо на воде), отпустить — пас.
           // Тач шлёт разрез уже по отпусканию кнопки (thruD = false) — он идёт старым путём ниже.
@@ -1361,7 +1364,7 @@
         else if (!a.ai && a.t > 1.6) this.releaseShot(p, a, { type: a.opts.type, power: 1, zAim: this.humanAim(p, this.inputs[p.ctrl]), yAim: 0.7 });
         return;
       }
-      if (a.t >= a.dur) { if (a.type === 'release') p.liftTarget = 0.1; p.action = null; }
+      if (a.t >= a.dur) { if (a.type === 'release' || a.type === 'pass') p.liftTarget = 0.1; p.action = null; }
     }
 
     separate() {

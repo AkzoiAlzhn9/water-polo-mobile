@@ -4,7 +4,7 @@
 // Локально (?netmock) вместо комнаты платформы работает BroadcastChannel — можно сыграть в двух вкладках.
 // На своём сайте (GitHub Pages) вместо claude.ai — Firebase: вход через Google и комнаты в Realtime Database.
 WP.Net = (function () {
-  const ACT = ['windup', 'release', 'fake', 'block', 'steal', 'catch', 'celebrate', 'dive', 'drawfoul'];
+  const ACT = ['windup', 'release', 'fake', 'block', 'steal', 'catch', 'celebrate', 'dive', 'drawfoul', 'pass'];
   const STY = ['over', 'side', 'flick', 'back'];
   const STATES = ['intro', 'sprint', 'live', 'dead', 'goal', 'break', 'final', 'timeout', 'penalty'];
   const CNT = ['pass', 'shootP', 'lob', 'skipP', 'fake', 'foul', 'play', 'sub', 'thru', 'lobpass', 'timeout', 'challenge'];
