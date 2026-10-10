@@ -189,11 +189,77 @@
     return GC[key];
   }
 
+  // Тело из Blender (js/body-model.js): общие массивы, карты нормалей и затенения; геометрия — под телосложение
+  let BODY = null;
+  function bodyData() {
+    if (BODY) return BODY;
+    const D = WP.BODY;
+    const dec = (b64, T) => { const b = atob(b64), u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return new T(u.buffer); };
+    const tex = (url) => { const t = new THREE.TextureLoader().load(url); t.anisotropy = 4; return t; };
+    BODY = { pos: dec(D.pos, Float32Array), nrm: dec(D.nrm, Int8Array), uv: dec(D.uv, Float32Array), idx: dec(D.idx, Uint16Array), ji: dec(D.ji, Uint8Array), jw: dec(D.jw, Uint8Array), normalMap: tex(D.normalMap), aoMap: tex(D.aoMap) };
+    return BODY;
+  }
+  // Телосложение bw: торс шире, плечи и бёдра расходятся, руки и ноги толще вокруг своей оси (смешивание по весам костей)
+  const BGC = {};
+  function bodySkinGeo(bw) {
+    const key = bw.toFixed(2);
+    if (BGC[key]) return BGC[key];
+    const B = bodyData(), D = WP.BODY, n = D.count, P = B.pos, out = new Float32Array(P.length);
+    const k = bw - 1, ca = Math.cos(D.bind.arm), sa = Math.sin(D.bind.arm), cl = Math.cos(D.bind.leg), sl = Math.sin(D.bind.leg);
+    // Для каждой кости: [вид, сторона]; вид 0 — торс, 1 — шея/голова, 2 — рука/нога (ось), 3 — кисть/стопа (сдвиг)
+    const kinds = D.bones.map(name => {
+      const s = name.endsWith('L') ? -1 : 1;
+      if (name === 'body') return [0, 0];
+      if (name === 'neck' || name === 'head') return [1, 0];
+      if (/^(sh|el)/.test(name)) return [2, s, 0, -0.02, s * 0.22, 0, -ca, s * sa, s * 0.22 * k];
+      if (/^(hip|kn)/.test(name)) return [2, s, 0, -0.6, s * 0.09, 0, -cl, s * sl, s * 0.09 * k];
+      return [3, s, 0, 0, 0, 0, 0, 0, s * (name.startsWith('hand') ? 0.22 : 0.09) * k];
+    });
+    const T = [0, 0, 0];
+    const tf = (K, x, y, z) => {
+      switch (K[0]) {
+        case 0: T[0] = x * (1 + 0.5 * k); T[1] = y; T[2] = z * bw; return;
+        case 1: T[0] = x * (1 + 0.3 * k); T[1] = y; T[2] = z * (1 + 0.3 * k); return;
+        case 2: {
+          const rx = x - K[2], ry = y - K[3], rz = z - K[4], a = rx * K[5] + ry * K[6] + rz * K[7];
+          const ax = K[5] * a, ay = K[6] * a, az = K[7] * a;
+          T[0] = K[2] + ax + (rx - ax) * bw; T[1] = K[3] + ay + (ry - ay) * bw; T[2] = K[4] + K[8] + az + (rz - az) * bw; return;
+        }
+        default: T[0] = x; T[1] = y; T[2] = z + K[8];
+      }
+    };
+    for (let i = 0; i < n; i++) {
+      const x = P[i * 3], y = P[i * 3 + 1], z = P[i * 3 + 2];
+      let ox = 0, oy = 0, oz = 0;
+      for (let q = 0; q < 4; q++) {
+        const w = B.jw[i * 4 + q] / 255; if (!w) continue;
+        tf(kinds[B.ji[i * 4 + q]], x, y, z); ox += T[0] * w; oy += T[1] * w; oz += T[2] * w;
+      }
+      out[i * 3] = ox; out[i * 3 + 1] = oy; out[i * 3 + 2] = oz;
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(out, 3));
+    g.setAttribute('normal', new THREE.BufferAttribute(B.nrm, 3, true));
+    g.setAttribute('uv', new THREE.BufferAttribute(B.uv, 2));
+    g.setAttribute('skinIndex', new THREE.BufferAttribute(B.ji, 4));
+    g.setAttribute('skinWeight', new THREE.BufferAttribute(B.jw, 4, true));
+    g.setIndex(new THREE.BufferAttribute(B.idx, 1));
+    for (const [st, c, m] of D.groups) g.addGroup(st, c, m);
+    return (BGC[key] = g);
+  }
+
   // Общие материалы: кожа — по цвету, форма — по команде (меньше шейдеров и переключений на телефоне)
   const MC = {};
   function skinMat(hex) {
     const k = 'skin' + hex;
     return MC[k] || (MC[k] = WP.underwaterify(new THREE.MeshPhysicalMaterial({ color: hex, map: skinTex(), roughness: 0.46, clearcoat: 0.45, clearcoatRoughness: 0.3, sheen: 0.2, sheenRoughness: 0.7, sheenColor: new THREE.Color(0xffe2cc) })));
+  }
+  // Кожа тела из Blender: рельеф мышц — картой нормалей, впадины и складки — запечённым затенением
+  function skinBodyMat(hex) {
+    const k = 'skinB' + hex;
+    if (MC[k]) return MC[k];
+    const B = bodyData();
+    return (MC[k] = WP.underwaterify(new THREE.MeshPhysicalMaterial({ color: hex, map: skinTex(), normalMap: B.normalMap, aoMap: B.aoMap, aoMapIntensity: 1.0, roughness: 0.46, clearcoat: 0.45, clearcoatRoughness: 0.3, sheen: 0.2, sheenRoughness: 0.7, sheenColor: new THREE.Color(0xffe2cc) })));
   }
   // Кожа неоднородная: лёгкие пятна и поры, чтобы не выглядела пластиком (текстура общая, тон — цветом материала)
   let SKT = null;
@@ -342,13 +408,17 @@
 
       const root = new THREE.Group();
       const body = new THREE.Group(); body.scale.setScalar(this.h); root.add(body);
-      add(body, G.torso, mSkin);
-      add(body, G.suit, mSuit);
+      // Тело из Blender — одна кожа на костях рига; без него — прежние вылепленные части
+      const sk = !!WP.BODY;
       const bw = this.bw;
-      // Мышцы вылеплены прямо в торсе; трапеция — мягкий скат от шеи к плечам
-      add(body, s.ball, mSkin, -0.012, 0.062, 0, 0.05, 0.03, 0.105 * bw);
+      if (!sk) {
+        add(body, G.torso, mSkin);
+        add(body, G.suit, mSuit);
+        // Мышцы вылеплены прямо в торсе; трапеция — мягкий скат от шеи к плечам
+        add(body, s.ball, mSkin, -0.012, 0.062, 0, 0.05, 0.03, 0.105 * bw);
+      }
       const neck = new THREE.Group(); neck.position.y = 0.09; body.add(neck);
-      add(neck, s.neck, mSkin, 0, 0.03, 0);
+      if (!sk) add(neck, s.neck, mSkin, 0, 0.03, 0);
       const headG = new THREE.Group(); headG.position.y = 0.14; headG.scale.setScalar(0.93); neck.add(headG); // голова чуть меньше — плечи кажутся мощнее
       const HG = headGeo();
       add(headG, HG.head, mSkin);
@@ -369,11 +439,12 @@
       strap.rotation.set(0, Math.PI / 2, Math.PI);
       const mkArm = (side) => {
         const sh = new THREE.Group(); sh.position.set(0, -0.02, side * 0.22 * bw); body.add(sh);
-        add(sh, G.upper, mSkin);
         const el = new THREE.Group(); el.position.y = -0.3; sh.add(el);
+        const hand = new THREE.Group(); hand.position.y = -0.265; el.add(hand);
+        if (sk) return { sh, el, hand };
+        add(sh, G.upper, mSkin);
         add(el, s.joint, mSkin, 0, 0, 0, 0.04 * bw, 0.04 * bw, 0.04 * bw);            // локоть без щели на сгибе
         add(el, G.fore, mSkin);
-        const hand = new THREE.Group(); hand.position.y = -0.265; el.add(hand);
         add(hand, s.ball, mSkin, 0, -0.055, 0, 0.027, 0.066, 0.055);               // ладонь — у ватерполистов крупная
         const fing = add(hand, s.ball, mSkin, 0.01, -0.142, 0, 0.018, 0.058, 0.05); // сомкнутые пальцы, чуть согнуты
         fing.rotation.z = 0.22;
@@ -383,23 +454,42 @@
       };
       const mkLeg = (side) => {
         const hip = new THREE.Group(); hip.position.set(0, -0.6, side * 0.09 * bw); body.add(hip);
-        add(hip, G.thigh, mSkin);
         const kn = new THREE.Group(); kn.position.y = -0.46; hip.add(kn);
+        const foot = new THREE.Group(); foot.position.y = -0.44; kn.add(foot);
+        if (sk) return { hip, kn, foot };
+        add(hip, G.thigh, mSkin);
         add(kn, s.joint, mSkin, 0, 0, 0, 0.06 * bw, 0.06 * bw, 0.06 * bw);            // колено
         add(kn, G.shin, mSkin);
         add(kn, s.ball, mSkin, -0.03 * bw, -0.14, 0, 0.036 * bw, 0.1, 0.042 * bw);    // икра
-        const foot = new THREE.Group(); foot.position.y = -0.44; kn.add(foot);
         add(foot, s.ball, mSkin, 0.06, -0.022, 0, 0.115, 0.032, 0.047);             // стопа
         return { hip, kn, foot };
       };
       const aR = mkArm(1), aL = mkArm(-1), lR = mkLeg(1), lL = mkLeg(-1);
       this.rig = { root, body, neck, headG, aR, aL, lR, lL };
+      if (sk) this.skinBody(skinBodyMat(skin), mSuit);
       this.world.scene.add(root);
       this.j = {
         y: 0.05, pitch: 0.2, roll: 0, yaw: 0,
         rs: 1.3, ra: 0.7, re: 0.7, ls: 1.3, la: 0.7, le: 0.7,
         hrs: 1.2, hra: 0.5, hrk: -1.4, hls: 1.2, hla: 0.5, hlk: -1.4,
       };
+    }
+
+    // Кожа из Blender на узлах рига: риг ставится в позу привязки (руки и ноги разведены, суставы прямые),
+    // запоминаются обратные матрицы — дальше кожа просто следует за узлами при любой анимации
+    skinBody(mSkin, mSuit) {
+      const r = this.rig, D = WP.BODY;
+      const map = { body: r.body, neck: r.neck, head: r.headG, shR: r.aR.sh, elR: r.aR.el, handR: r.aR.hand, shL: r.aL.sh, elL: r.aL.el, handL: r.aL.hand, hipR: r.lR.hip, knR: r.lR.kn, footR: r.lR.foot, hipL: r.lL.hip, knL: r.lL.kn, footL: r.lL.foot };
+      r.body.rotation.set(0, 0, 0); r.body.position.y = 0; r.neck.rotation.set(0, 0, 0);
+      this.setArm(r.aR, 0, D.bind.arm, 0, 1); this.setArm(r.aL, 0, D.bind.arm, 0, -1);
+      this.setLeg(r.lR, 0, D.bind.leg, 0, 1); this.setLeg(r.lL, 0, D.bind.leg, 0, -1);
+      r.lR.foot.rotation.z = 0; r.lL.foot.rotation.z = 0;
+      const mesh = new THREE.SkinnedMesh(bodySkinGeo(this.bw), [mSkin, mSuit]);
+      r.body.add(mesh);
+      r.root.updateMatrixWorld(true);
+      mesh.bind(new THREE.Skeleton(D.bones.map(n => map[n])), mesh.matrixWorld);
+      mesh.frustumCulled = false; // руки уходят далеко от позы привязки
+      r.skin = mesh;
     }
 
     dispose() { if (this.rig) { this.world.scene.remove(this.rig.root); this.rig = null; } }
