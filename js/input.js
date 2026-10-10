@@ -15,10 +15,10 @@ WP.Input = (function () {
   window.addEventListener('blur', () => { for (const k of keys) released.add(k); keys.clear(); });
 
   const MAP = {
-    p1: { up: ['KeyW'], down: ['KeyS'], left: ['KeyA'], right: ['KeyD'], sprint: ['ShiftLeft'], pass: ['KeyJ'], shoot: ['KeyK'], lob: ['KeyL'], skip: ['KeyI'], fake: ['KeyU'], foul: ['KeyE'], thru: ['KeyH'], lobpass: ['KeyO'], play: ['KeyG'], sub: ['KeyR'], tac: ['KeyQ'], timeout: ['KeyT'], challenge: ['KeyY'] },
+    p1: { up: ['KeyW'], down: ['KeyS'], left: ['KeyA'], right: ['KeyD'], sprint: ['ShiftLeft'], pass: ['KeyJ'], shoot: ['KeyK'], lob: ['KeyL'], skip: ['KeyI'], fake: ['KeyU'], foul: ['KeyE'], thru: ['KeyH'], lobpass: ['KeyO'], play: ['KeyG'], drive: ['KeyF'], sub: ['KeyR'], tac: ['KeyQ'], timeout: ['KeyT'], challenge: ['KeyY'] },
     // Вторая раскладка для одиночной игры: стрелки + Z X C V B
-    alt: { up: ['ArrowUp'], down: ['ArrowDown'], left: ['ArrowLeft'], right: ['ArrowRight'], sprint: ['ShiftRight'], pass: ['KeyZ'], shoot: ['KeyX', 'Space'], lob: ['KeyC'], skip: ['KeyV'], fake: ['KeyB'], foul: ['KeyN'], thru: [], lobpass: [], play: [], sub: [], tac: [], timeout: [], challenge: [] },
-    p2: { up: ['ArrowUp'], down: ['ArrowDown'], left: ['ArrowLeft'], right: ['ArrowRight'], sprint: ['ShiftRight'], pass: ['Comma'], shoot: ['Period'], lob: ['Slash'], skip: ['Semicolon'], fake: ['Quote'], foul: ['BracketRight'], thru: ['Enter'], lobpass: [], play: ['BracketLeft'], sub: [], tac: [], timeout: [], challenge: ['Backslash'] },
+    alt: { up: ['ArrowUp'], down: ['ArrowDown'], left: ['ArrowLeft'], right: ['ArrowRight'], sprint: ['ShiftRight'], pass: ['KeyZ'], shoot: ['KeyX', 'Space'], lob: ['KeyC'], skip: ['KeyV'], fake: ['KeyB'], foul: ['KeyN'], thru: [], lobpass: [], play: [], drive: [], sub: [], tac: [], timeout: [], challenge: [] },
+    p2: { up: ['ArrowUp'], down: ['ArrowDown'], left: ['ArrowLeft'], right: ['ArrowRight'], sprint: ['ShiftRight'], pass: ['Comma'], shoot: ['Period'], lob: ['Slash'], skip: ['Semicolon'], fake: ['Quote'], foul: ['BracketRight'], thru: ['Enter'], lobpass: [], play: ['BracketLeft'], drive: ['Minus'], sub: [], tac: [], timeout: [], challenge: ['Backslash'] },
   };
 
   // ---------- настройки управления (хранятся в браузере) ----------
@@ -26,7 +26,7 @@ WP.Input = (function () {
   const ACTIONS = [
     ['up', 'Плыть вперёд'], ['down', 'Плыть назад'], ['left', 'Плыть влево'], ['right', 'Плыть вправо'], ['sprint', 'Рывок'],
     ['pass', 'Пас (держать — резкий) · без мяча: сменить игрока / «Дай!»'], ['thru', 'Пас в разрез (держать — прицел) · Рывок в прицеле — верхом'], ['lobpass', 'Пас верхом — навесом над защитником'], ['shoot', 'Бросок (держать — сильнее) · без мяча: отбор'], ['lob', 'Парашют · без мяча: блок'],
-    ['skip', 'Бросок с отскоком'], ['fake', 'Финт (держать — кач)'], ['foul', 'Заработать фол · в защите держать: руки вверх'], ['play', 'Заслон'],
+    ['skip', 'Бросок с отскоком'], ['fake', 'Финт (держать — кач)'], ['foul', 'Заработать фол · в защите держать: руки вверх'], ['play', 'Заслон'], ['drive', 'Проход: партнёр уходит на 2 м, игрок с 2 м выходит на 6 м'],
     ['sub', 'Быстрая замена'], ['tac', 'Тактика и замены'], ['timeout', 'Тайм-аут'], ['challenge', 'Видеочеллендж'],
   ];
   const RESERVED = { Escape: 'пауза', Tab: 'камера', KeyM: 'звук', KeyP: 'пауза' };
@@ -40,6 +40,8 @@ WP.Input = (function () {
       const d = JSON.parse(localStorage.getItem('polo25_controls') || 'null');
       if (d) {
         for (const lay of ['p1', 'alt']) if (d[lay]) for (const [a] of ACTIONS) if (Array.isArray(d[lay][a])) MAP[lay][a] = d[lay][a].slice(0, 2);
+        // Новое действие в старой раскладке: стандартная клавиша, если её не заняли под другое
+        for (const lay of ['p1', 'alt']) for (const [a] of ACTIONS) if (d[lay] && !Array.isArray(d[lay][a])) MAP[lay][a] = DEFAULT[lay][a].filter(c => !ACTIONS.some(([b]) => b !== a && MAP.p1[b].concat(MAP.alt[b]).includes(c)));
         if (d.opts) Object.assign(opts, d.opts);
       }
     } catch (e) { /* повреждённые настройки — остаются стандартные */ }
@@ -82,11 +84,11 @@ WP.Input = (function () {
   loadCfg();
   if (document.body) applyBodyOpts(); else window.addEventListener('DOMContentLoaded', applyBodyOpts);
 
-  const touch = { x: 0, y: 0, on: false, btn: {}, gest: {}, pressed: new Set(), released: new Set() };
+  const touch = { x: 0, y: 0, on: false, btn: {}, gest: {}, pressed: new Set(), released: new Set(), edit: false };
   const padPrev = [{}, {}];
 
   function any(list, set) { for (const k of list) if (set.has(k)) return true; return false; }
-  function blank() { return { ax: 0, ay: 0, sprint: false, sprintK: false, pass: false, passD: false, shootP: false, shootD: false, lob: false, skipP: false, skipD: false, fake: false, fakeD: false, foul: false, foulD: false, play: false, sub: false, tac: false, thru: false, thruD: false, thruUp: false, lobpass: false, passGest: null, shootGest: null, timeout: false, challenge: false }; }
+  function blank() { return { ax: 0, ay: 0, sprint: false, sprintK: false, pass: false, passD: false, shootP: false, shootD: false, lob: false, skipP: false, skipD: false, fake: false, fakeD: false, foul: false, foulD: false, play: false, drive: false, sub: false, tac: false, thru: false, thruD: false, thruUp: false, lobpass: false, passGest: null, shootGest: null, timeout: false, challenge: false }; }
 
   function addKeys(s, m) {
     s.ax += (any(m.right, keys) ? 1 : 0) - (any(m.left, keys) ? 1 : 0);
@@ -105,6 +107,7 @@ WP.Input = (function () {
     s.fakeD = s.fakeD || any(m.fake, keys);
     s.foul = s.foul || any(m.foul, pressed);
     s.play = s.play || any(m.play, pressed);
+    s.drive = s.drive || any(m.drive, pressed);
     s.thru = s.thru || any(m.thru, pressed);
     // Удержание разреза — прицел; нажали и отпустили за один кадр — всё равно «нажата» в этом кадре
     s.thruD = s.thruD || any(m.thru, keys) || (any(m.thru, pressed) && any(m.thru, released));
@@ -150,6 +153,7 @@ WP.Input = (function () {
     s.lob = s.lob || T.pressed.has('lob');
     s.fake = s.fake || T.pressed.has('fake'); s.fakeD = s.fakeD || !!T.btn.fake;
     s.play = s.play || T.pressed.has('play');
+    s.drive = s.drive || T.pressed.has('drive');
     // «Разрез» срабатывает при отпускании: свайп вверх — разрез верхом
     if (T.released.has('thru')) { s.thru = true; s.thruUp = T.gest.thru === 'up'; }
     if (T.released.has('pass') && T.gest.pass) s.passGest = T.gest.pass;
@@ -184,19 +188,23 @@ WP.Input = (function () {
 
   function bindTouch(root) {
     const stick = root.querySelector('#stick'), knob = stick.querySelector('i');
-    let sid = null, cx = 0, cy = 0;
+    let sid = null, cx = 0, cy = 0, sc = 1;
     const RAD = 46;
+    // Стик может быть увеличен или уменьшен в своей раскладке: ход ручки считаем в экранных пикселях
     const move = (e) => {
       if (e.pointerId !== sid) return;
       let dx = e.clientX - cx, dy = e.clientY - cy;
-      const m = Math.hypot(dx, dy);
-      if (m > RAD) { dx = dx / m * RAD; dy = dy / m * RAD; }
-      knob.style.transform = `translate(${dx}px, ${dy}px)`;
-      touch.x = dx / RAD; touch.y = -dy / RAD; touch.on = true;
+      const m = Math.hypot(dx, dy), rad = RAD * sc;
+      if (m > rad) { dx = dx / m * rad; dy = dy / m * rad; }
+      knob.style.transform = `translate(${dx / sc}px, ${dy / sc}px)`;
+      touch.x = dx / rad; touch.y = -dy / rad; touch.on = true;
     };
     stick.addEventListener('pointerdown', (e) => {
-      sid = e.pointerId; stick.setPointerCapture(sid);
+      if (touch.edit) return;
+      sid = e.pointerId;
       const r = stick.getBoundingClientRect(); cx = r.left + r.width / 2; cy = r.top + r.height / 2;
+      sc = r.width / (stick.offsetWidth || r.width);
+      try { stick.setPointerCapture(sid); } catch (er) { /* старые браузеры */ }
       move(e);
     });
     stick.addEventListener('pointermove', move);
@@ -209,6 +217,7 @@ WP.Input = (function () {
     root.querySelectorAll('[data-b]').forEach((btn) => {
       let k = btn.dataset.b, y0 = 0;
       btn.addEventListener('pointerdown', (e) => {
+        if (touch.edit) return;
         e.preventDefault(); k = btn.dataset.b; y0 = e.clientY;
         try { btn.setPointerCapture(e.pointerId); } catch (er) { /* старые браузеры */ }
         touch.btn[k] = true; touch.gest[k] = null;
@@ -229,6 +238,8 @@ WP.Input = (function () {
   return {
     poll, bindTouch, opts, ACTIONS, RESERVED, label, kbd, kbd2, moveKbd, keyName, bind, unbind, resetKeys, setOpt,
     keysOf: (a) => [MAP.p1[a][0] || '', MAP.alt[a][0] || ''],
+    // Режим настройки раскладки: кнопки не нажимаются, их перетаскивают
+    touchEdit(on) { touch.edit = !!on; touch.btn = {}; touch.on = false; touch.x = touch.y = 0; },
     capture(cb) { captureCb = cb; }, cancelCapture() { captureCb = null; },
   };
 })();

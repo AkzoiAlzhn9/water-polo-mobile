@@ -245,10 +245,10 @@
     const rx = -fz, rz = fx;
     return {
       x: rx * inp.ax + fx * inp.ay, z: rz * inp.ax + fz * inp.ay, mag: inp.mag, sprint: inp.sprint, sprintK: inp.sprintK,
-      pass: inp.pass, passD: inp.passD, shootP: inp.shootP, shootD: inp.shootD, lob: inp.lob, skipP: inp.skipP, skipD: inp.skipD, timeout: inp.timeout, fake: inp.fake, fakeD: inp.fakeD, foul: inp.foul, foulD: inp.foulD, play: inp.play, sub: inp.sub, thru: inp.thru, thruD: inp.thruD, thruUp: inp.thruUp, lobpass: inp.lobpass, passGest: inp.passGest, shootGest: inp.shootGest, challenge: inp.challenge,
+      pass: inp.pass, passD: inp.passD, shootP: inp.shootP, shootD: inp.shootD, lob: inp.lob, skipP: inp.skipP, skipD: inp.skipD, timeout: inp.timeout, fake: inp.fake, fakeD: inp.fakeD, foul: inp.foul, foulD: inp.foulD, play: inp.play, drive: inp.drive, sub: inp.sub, thru: inp.thru, thruD: inp.thruD, thruUp: inp.thruUp, lobpass: inp.lobpass, passGest: inp.passGest, shootGest: inp.shootGest, challenge: inp.challenge,
     };
   }
-  function clearEdges(i) { if (i) { i.pass = i.shootP = i.lob = i.skipP = i.timeout = i.fake = i.foul = i.play = i.sub = i.thru = i.lobpass = i.challenge = false; i.passGest = i.shootGest = null; } }
+  function clearEdges(i) { if (i) { i.pass = i.shootP = i.lob = i.skipP = i.timeout = i.fake = i.foul = i.play = i.drive = i.sub = i.thru = i.lobpass = i.challenge = false; i.passGest = i.shootGest = null; } }
 
   function loop(now) {
     requestAnimationFrame(loop);

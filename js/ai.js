@@ -240,7 +240,7 @@
       const s = slots[p.slot];
       let tx = s.x, tz = s.z;
       // Заслон: участники розыгрыша идут не на свои точки
-      if (play && (p === play.screener || p === play.driver) && play.target.has(p)) {
+      if (play && play.target.has(p)) {
         const g = play.target.get(p); tx = g.x; tz = g.z;
       }
       // Проходы к воротам — только в стиле «движение»
@@ -257,7 +257,8 @@
       if (AI.lineD(team, tx) < 2.12 && bl > AI.lineD(team, tx)) tx = team.dir * (R.HALF_L - 2.2);
       p.target = { x: tx, z: tz };
       const far = Math.hypot(tx - p.x, tz - p.z);
-      p.moveMode = (counter && (far > 2 || ai.phaseT < 4)) || (play && ((p === play.driver && play.phase === 'drive') || (p === play.screener && play.phase === 'set'))) ? 'sprint' : 'swim';
+      const inPlay = play && (play.type === 'drive' ? play.target.has(p) && far > 0.8 : (p === play.driver && play.phase === 'drive') || (p === play.screener && play.phase === 'set'));
+      p.moveMode = (counter && (far > 2 || ai.phaseT < 4)) || inPlay ? 'sprint' : 'swim';
       p.faceTo = ball.pos; p.liftTarget = 0.05;
     }
   };
@@ -287,19 +288,78 @@
     return ai.play;
   };
 
+  // ---------- Розыгрыш «проход» (восьмёрка на фланге): игрок с 5–6 м уходит к воротам на 2 м, а тот, кто стоял
+  // на 2 м с этого фланга, выходит на его место на 6 м. Опекун проходящего реагирует с запозданием — шанс на пас ----------
+  AI.startDrive = function (match, team, driverWish) {
+    const ai = team.ai, ball = match.ball;
+    const car = ball.holder && ball.holder.team === team ? ball.holder : null;
+    if (!car || match.state !== 'live' || ai.play) return null;
+    const field = team.players.filter(p => p.active && !p.isGK && !p.rolling && !p.excluded);
+    if (field.length < 4) return null;
+    const sideOf = (p) => Math.sign(p.z * team.dir) || 1;
+    const pick = (s) => {
+      let driver = driverWish && driverWish !== car && field.includes(driverWish) ? driverWish : null;
+      if (!driver) {
+        // Проходит полевой с 4–8 м на этом фланге (ближе всех к точке полусреднего)
+        const flat = AI.att(team, 5.3, s * 3.0);
+        driver = field.filter(p => p !== car && AI.lineD(team, p.x) > 3.8 && AI.lineD(team, p.x) < 8.5 && sideOf(p) === s)
+          .sort((a, b) => Math.hypot(a.x - flat.x, a.z - flat.z) - Math.hypot(b.x - flat.x, b.z - flat.z))[0];
+      }
+      if (!driver) return null;
+      // Выходит игрок с 2 м того же фланга (крайний или центровой у штанги), не сам проходящий
+      const post = AI.att(team, 2.4, s * 3.4);
+      const wing = field.filter(p => p !== car && p !== driver && AI.lineD(team, p.x) < 4.0 && (sideOf(p) === s || Math.abs(p.z) < 1.2))
+        .sort((a, b) => Math.hypot(a.x - post.x, a.z - post.z) - Math.hypot(b.x - post.x, b.z - post.z))[0] || null;
+      return { driver, wing };
+    };
+    // Фланг: если мяч у полевого на фланге — проход с другой стороны; с мячом в центре — где опекун проходящего дальше
+    const cs = sideOf(car), center = Math.abs(car.z) < 1.6;
+    let s = center ? 1 : -cs, r = pick(s);
+    if (center) {
+      const r2 = pick(-s);
+      const gap = (q) => q ? AI.nearestOpp(q.driver, undefined, undefined, true).d : -1;
+      if (gap(r2) > gap(r)) { r = r2; s = -s; }
+    }
+    if (!r) { s = -s; r = pick(s); }
+    if (!r) return null;
+    const marker = team.opp.players.find(o => o.mark === r.driver && o.active) || AI.nearestOpp(r.driver, undefined, undefined, true).p;
+    // Опекун «засыпает» на 0,3–0,8 с: чем быстрее проходящий и слабее защитник, тем дольше
+    if (marker) marker.lagT = clamp(0.55 + (r.driver.attrs.spd - marker.attrs.def) / 60, 0.3, 0.8);
+    ai.play = { type: 'drive', phase: 'cut', t: 0, driver: r.driver, wing: r.wing, side: s, carrier: car, marker, target: new Map() };
+    return ai.play;
+  };
+
   AI.playStep = function (match, team, field, car, counter, dead) {
     const ai = team.ai, ball = match.ball;
     ai.playCD = (ai.playCD || rnd(6, 12)) - 0.15;
     // ИИ сам разыгрывает заслоны в позиционной атаке (у людей — по кнопке)
     if (!ai.play && !team.human && !counter && !dead && car && ai.playCD <= 0 && ai.phaseT > 7 && match.shotClock > 10 && Math.random() < (team.tac && team.tac.move === 'motion' ? 0.35 : 0.2)) {
       ai.playCD = rnd(14, 24);
-      AI.startScreen(match, team);
+      if (Math.random() < 0.45) AI.startDrive(match, team); else AI.startScreen(match, team);
     } else if (ai.playCD <= 0) ai.playCD = rnd(4, 8);
     const pl = ai.play;
     if (!pl) return;
     // После обычного фола розыгрыш не срывается: команда вводит мяч и продолжает
     if (dead) { if (!match.restart || match.restart.team !== team) ai.play = null; return; }
     const lost = !(ball.holder ? ball.holder.team === team : ball.flight && ball.flight.type === 'pass' && ball.flight.team === team);
+    if (pl.type === 'drive') {
+      if (lost || !pl.driver.active || (ball.flight && ball.flight.type === 'shot')) { ai.play = null; return; }
+      pl.t += 0.15;
+      const D = pl.driver, Wg = pl.wing && pl.wing.active ? pl.wing : null, sd = pl.side;
+      // Проходящий получил мяч — дальше он сам решает, бросать или отдавать
+      if (D.hasBall) { pl.target.delete(D); }
+      else if (pl.phase === 'cut') {
+        pl.target.set(D, AI.att(team, 2.35, sd * 2.2));
+        if (AI.lineD(team, D.x) < 3.0 || pl.t > 3.0) { pl.phase = 'post'; pl.t = 0; }
+      } else pl.target.set(D, AI.att(team, 2.4, sd * 2.8));
+      if (Wg && !Wg.hasBall) pl.target.set(Wg, AI.att(team, 6.0, sd * 3.2));
+      if (pl.phase === 'post' && pl.t > 1.8) {
+        // Восьмёрка завершена: проходящий занимает точку у 2 м, вышедший — точку на 6 м
+        if (Wg && D.slot >= 0 && Wg.slot >= 0) { const a = D.slot, b = Wg.slot, an = D.slotName; D.slot = b; Wg.slot = a; D.slotName = Wg.slotName; Wg.slotName = an; }
+        ai.play = null;
+      }
+      return;
+    }
     if (lost || !pl.screener.active || !pl.driver.active || !pl.def.active || (ball.flight && ball.flight.type === 'shot')) { ai.play = null; return; }
     pl.t += 0.15;
     const own = team.dir * R.HALF_L;
@@ -325,6 +385,14 @@
   // Кому отдать мяч в розыгрыше: открытому проходящему, иначе откатившемуся заслоняющему
   AI.playPassTarget = function (match, p) {
     const pl = p.team.ai.play;
+    if (pl && pl.type === 'drive') {
+      if (pl.t < 0.3 && pl.phase === 'cut') return null;
+      for (const t of [pl.driver, pl.wing]) {
+        if (!t || t === p || !t.active) continue;
+        if (AI.nearestOpp(t, undefined, undefined, true).d > (t === pl.driver ? 1.0 : 1.6) && AI.passScore(match, p, t) > -0.5) return t;
+      }
+      return null;
+    }
     if (!pl || pl.phase !== 'drive' || pl.t < 0.25) return null;
     for (const t of [pl.driver, pl.screener]) {
       if (t === p || !t.active) continue;
@@ -423,6 +491,8 @@
     const holeHelp = AI.att(opp, 3.3, 0);
     for (const d of field) {
       if (d.ctrl && d.input.active) continue;
+      // Проспал проход: ещё немного плывёт к прежней точке
+      if (d.lagT > 0) { d.lagT -= 0.15; continue; }
       const a = d.mark;
       if (!a) { d.target = holeHelp; d.moveMode = 'swim'; continue; }
       const gx = ownX - a.x, gz = -a.z, gl = Math.hypot(gx, gz) || 1;

@@ -419,6 +419,27 @@ body.playing { -webkit-user-select: none; user-select: none; -webkit-touch-callo
 .tbtns button[data-g="up"] { box-shadow: 0 -8px 0 -2px #7fe3a0; }
 .tbtns button[data-g="down"] { box-shadow: 0 8px 0 -2px #ff9c8a; }
 .tbtns .tplay { position: absolute; right: 0; bottom: calc(100% + 8px); width: auto; height: 34px; padding: 0 14px; border-radius: 17px; font-size: 12px; border-color: rgba(120,220,150,.6); }
+.tbtns .tdrive { right: auto; left: 0; border-color: rgba(255,194,58,.6); }
+body.lefty .tbtns .tdrive { left: auto; right: 0; }
+/* Своя раскладка: каждая кнопка и стик стоят там, куда их перетащил игрок, со своим размером (--s) */
+#touch.custom #stick, #touch.custom .tbtns button { position: fixed; right: auto; bottom: auto; margin: 0; transform: translate(-50%, -50%) scale(var(--s, 1)); }
+#touch.custom .tbtns { transform: none; }
+#touch.custom .tbtns button { width: 58px; height: 58px; }
+#touch.custom .tbtns button[data-k="pass"] { width: 64px; height: 64px; }
+#touch.custom .tbtns button[data-k="shoot"] { width: 76px; height: 76px; }
+#touch.custom .tbtns button.tplay { width: auto; height: 34px; }
+#touch.custom .tbtns button.on, #touch.custom .tbtns button[data-b="shoot"].on { transform: translate(-50%, -50%) scale(calc(var(--s, 1) * .93)); }
+#touch.editing { z-index: 30; height: auto; inset: 0; }
+#touch.editing #stick, #touch.editing .tbtns button { outline: 2px dashed rgba(255,255,255,.35); outline-offset: 3px; cursor: grab; }
+#touch.editing .tbtns button.off { visibility: visible; }
+#touch.editing .te-sel { outline: 3px solid var(--accent) !important; }
+#tedit { position: fixed; inset: 0; z-index: 29; background: rgba(4,12,20,.62); }
+#tedit .te-bar { position: absolute; left: 50%; top: calc(10px + env(safe-area-inset-top, 0px)); transform: translateX(-50%); z-index: 31; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px; padding: 8px 10px; border-radius: 10px; background: var(--panel-solid); border: 1px solid var(--line); max-width: calc(100% - 24px); }
+#tedit .te-name { font: 700 13px var(--display); min-width: 150px; text-align: center; }
+#tedit .te-size { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+#tedit .te-size input { width: 120px; }
+#tedit .te-size b { min-width: 40px; font: 700 12px var(--display); }
+#tedit .btn { padding: 6px 10px; font-size: 13px; }
 /* Обучение */
 #tut { position: absolute; left: calc(16px + env(safe-area-inset-left, 0px)); top: calc(112px + env(safe-area-inset-top, 0px)); width: min(340px, calc(100% - 32px)); background: rgba(6,18,28,.9); border: 1px solid var(--line); border-left: 3px solid var(--cyan); border-radius: 6px; padding: 10px 12px 12px; pointer-events: auto; box-sizing: border-box; }
 #tut.ok { border-left-color: #35c46a; }
@@ -566,6 +587,7 @@ body.lefty.tb-large #stick { transform-origin: bottom right; }
   #stick i { left: 35px; top: 35px; }
   .tbtns { grid-template-columns: 58px 58px 70px; gap: 7px; }
   .tbtns button { height: 52px; font-size: 12px; } .tbtns button[data-b="pass"] { height: 58px; } .tbtns button[data-b="shoot"] { height: 70px; }
+  #touch.custom .tbtns button { width: 52px; height: 52px; } #touch.custom .tbtns button[data-k="pass"] { width: 58px; height: 58px; } #touch.custom .tbtns button[data-k="shoot"] { width: 70px; height: 70px; } #touch.custom .tbtns button.tplay { width: auto; height: 34px; }
   .card { max-height: calc(100% - 16px); padding: 14px 16px; }
 }
 
@@ -653,9 +675,9 @@ body.lefty.tb-large #stick { transform-origin: bottom right; }
   <div id="touch" hidden>
     <div id="stick"><i></i></div>
     <div class="tbtns">
-      <button data-b="fake">Кач</button><button data-b="lob">Разрез</button><button data-b="sprint">Рывок</button>
-      <button data-b="foul">Фол</button><button data-b="pass">Пас</button><button data-b="shoot">Бросок</button>
-      <button data-b="play" class="tplay">Заслон</button>
+      <button data-b="fake" data-k="fake">Кач</button><button data-b="lob" data-k="lob">Разрез</button><button data-b="sprint" data-k="sprint">Рывок</button>
+      <button data-b="foul" data-k="foul">Фол</button><button data-b="pass" data-k="pass">Пас</button><button data-b="shoot" data-k="shoot">Бросок</button>
+      <button data-b="play" data-k="play" class="tplay">Заслон</button><button data-b="drive" data-k="drive" class="tplay tdrive">Проход</button>
     </div>
   </div>
 
@@ -780,6 +802,15 @@ body.lefty.tb-large #stick { transform-origin: bottom right; }
     </div>
   </div>
 
+  <div id="tedit" hidden>
+    <div class="te-bar">
+      <div class="te-name" id="teName">Перетащи кнопку пальцем</div>
+      <label class="te-size">Размер <input type="range" id="teSize" min="50" max="180" step="5" value="100"><b id="teVal">100%</b></label>
+      <button class="btn" id="teAllM" title="Все кнопки мельче">Все −</button><button class="btn" id="teAllP" title="Все кнопки крупнее">Все +</button>
+      <button class="btn" id="teReset">Сбросить</button><button class="btn primary" id="teDone">Готово</button>
+    </div>
+  </div>
+
   <div id="ctlset" class="overlay scrim" hidden>
     <div class="card ctl-card">
       <div class="tac-head"><h2>Настройка управления</h2><button class="btn primary" id="csDone">Готово</button></div>
@@ -806,20 +837,20 @@ body.lefty.tb-large #stick { transform-origin: bottom right; }
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.min.js"></script>
-<script src="js/data.js?v=1791656147"></script>
-<script src="js/body-model.js?v=1791656147"></script>
-<script src="js/audio.js?v=1791656147"></script>
-<script src="js/world.js?v=1791656147"></script>
-<script src="js/player.js?v=1791656147"></script>
-<script src="js/ball.js?v=1791656147"></script>
-<script src="js/ai.js?v=1791656147"></script>
-<script src="js/match.js?v=1791656147"></script>
-<script src="js/input.js?v=1791656147"></script>
-<script src="js/career.js?v=1791656147"></script>
-<script src="js/tutorial.js?v=1791656147"></script>
-<script src="js/firebase-config.js?v=1791656147"></script>
-<script src="js/net.js?v=1791656147"></script>
-<script src="js/ui.js?v=1791656147"></script>
-<script src="js/main.js?v=1791656147"></script>
+<script src="js/data.js?v=1791661490"></script>
+<script src="js/body-model.js?v=1791661490"></script>
+<script src="js/audio.js?v=1791661490"></script>
+<script src="js/world.js?v=1791661490"></script>
+<script src="js/player.js?v=1791661490"></script>
+<script src="js/ball.js?v=1791661490"></script>
+<script src="js/ai.js?v=1791661490"></script>
+<script src="js/match.js?v=1791661490"></script>
+<script src="js/input.js?v=1791661490"></script>
+<script src="js/career.js?v=1791661490"></script>
+<script src="js/tutorial.js?v=1791661490"></script>
+<script src="js/firebase-config.js?v=1791661490"></script>
+<script src="js/net.js?v=1791661490"></script>
+<script src="js/ui.js?v=1791661490"></script>
+<script src="js/main.js?v=1791661490"></script>
 
 </body></html>

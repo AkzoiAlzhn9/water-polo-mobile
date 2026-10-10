@@ -1034,7 +1034,8 @@
         if (d < 1) continue;
         let s = AI.passScore(this, p, t);
         const pl = p.team.ai.play;
-        if (pl && pl.phase === 'drive' && (t === pl.driver || t === pl.screener)) s += t === pl.driver ? 0.6 : 0.3;
+        if (pl && pl.type !== 'drive' && pl.phase === 'drive' && (t === pl.driver || t === pl.screener)) s += t === pl.driver ? 0.6 : 0.3;
+        if (pl && pl.type === 'drive' && (t === pl.driver || t === pl.wing)) s += t === pl.driver ? 0.55 : 0.2;
         if (inp.mag > 0.3) {
           const c = (dx * inp.x + dz * inp.z) / (d * inp.mag);
           if (c < 0.3) continue;
@@ -1093,6 +1094,7 @@
         p.input.active = !scripted && !receiving && !(p.isGK && !p.hasBall) && !idle;
         if (inp.challenge) this.requestChallenge(team);
         if (inp.play) this.callScreen(team, !p.hasBall && this.cfg.pc ? p : null);
+        if (inp.drive) this.callDrive(team, !p.hasBall && this.cfg.pc ? p : null);
         if (inp.sub && !this.cfg.pc) this.quickSub(team);
         if (scripted && !penShooter) { if (inp.timeout && rs && rs.team === team) this.callTimeout(team); continue; }
         if (p.hasBall) {
@@ -1259,6 +1261,14 @@
       const pl = AI.startScreen(this, team, driverWish);
       if (!pl) { if (team.human) this.emit('passinfo', { msg: 'Заслон можно разыграть, когда мяч у своей команды' }); return false; }
       if (team.human) this.emit('passinfo', { msg: 'Заслон: №' + pl.screener.num + ' ' + pl.screener.name + ' ставит заслон для №' + pl.driver.num + ' ' + pl.driver.name });
+      return true;
+    }
+    // Проход (восьмёрка на фланге) по кнопке
+    callDrive(team, driverWish) {
+      if (this.state !== 'live') return false;
+      const pl = AI.startDrive(this, team, driverWish);
+      if (!pl) { if (team.human) this.emit('passinfo', { msg: 'Проход можно разыграть, когда мяч у своей команды' }); return false; }
+      if (team.human) this.emit('passinfo', { msg: 'Проход: №' + pl.driver.num + ' уходит на 2 м' + (pl.wing ? ', №' + pl.wing.num + ' выходит на 6 м' : '') });
       return true;
     }
     onScreenSet(team, pl) {

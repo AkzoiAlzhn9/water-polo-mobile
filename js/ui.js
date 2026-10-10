@@ -92,6 +92,8 @@ WP.UI = (function () {
       if (k === 'reset') { I.resetKeys(); csMsg = 'Стандартные клавиши восстановлены'; renderCtl(); return; }
       if (k === 'opt') { I.setOpt(b.dataset.k, !I.opts[b.dataset.k]); renderCtl(); return; }
       if (k === 'size') { I.setOpt('touchSize', b.dataset.v); renderCtl(); }
+      if (k === 'layout') { showCtl(false); tlOpen(); }
+      if (k === 'layoutReset') { tlSave(null); renderCtl(); }
     });
     $('toTac').addEventListener('click', () => showTactics(true));
     $('brkTac').addEventListener('click', () => showTactics(true));
@@ -127,6 +129,7 @@ WP.UI = (function () {
     });
     $('luHelp').addEventListener('click', () => openHelp('ctl'));
     WP.Input.bindTouch($('touch'));
+    tlBind(); tlApply();
     for (let i = 0; i < 6; i++) { const d = document.createElement('div'); d.className = 'lb'; d.hidden = true; $('labels').appendChild(d); labelEls.push(d); }
   }
 
@@ -447,7 +450,8 @@ WP.UI = (function () {
         onOff('autoSwitch', o.autoSwitch, 'Автосмена игрока', 'Когда соперник принял пас далеко от тебя, управление переходит к ближайшему защитнику.') +
         onOff('autoPower', o.autoPower, 'Автосила броска', 'Короткое нажатие «Бросок» сразу даёт сильный бросок (85%), держать не обязательно. Удобно на телефоне.');
     } else if (csTab === 'touch') {
-      h = '<div class="tac-sec"><div class="tac-lbl">Размер кнопок</div><div class="seg">' + [['normal', 'Обычный'], ['large', 'Крупный']].map(([v, n]) => '<button data-cs="size" data-v="' + v + '" aria-pressed="' + (o.touchSize === v) + '">' + n + '</button>').join('') + '</div></div>' +
+      h = '<div class="tac-sec"><div class="tac-lbl">Своя раскладка</div><p class="small muted">Перетащи стик и любую кнопку пальцем куда удобно и подбери размер каждой. Раскладка сохраняется на этом устройстве.' + (tl ? ' <b>Сейчас включена своя раскладка</b> — размер и «для левши» ниже на неё не действуют.' : '') + '</p><div class="row-btns"><button class="btn primary" data-cs="layout">Расположение и размер кнопок</button>' + (tl ? '<button class="btn" data-cs="layoutReset">Вернуть стандартную</button>' : '') + '</div></div>' +
+        '<div class="tac-sec"><div class="tac-lbl">Размер кнопок</div><div class="seg">' + [['normal', 'Обычный'], ['large', 'Крупный']].map(([v, n]) => '<button data-cs="size" data-v="' + v + '" aria-pressed="' + (o.touchSize === v) + '">' + n + '</button>').join('') + '</div></div>' +
         onOff('lefty', o.lefty, 'Для левши', 'Стик справа, кнопки слева.') +
         onOff('autoSprint', o.autoSprint, 'Авторывок', 'Стик до упора — игрок сам включает рывок (тратит силы). Работает и на геймпаде.') +
         onOff('vibrate', o.vibrate, 'Вибрация кнопок', 'Короткий отклик при нажатии (на телефонах, где браузер это поддерживает).') +
@@ -462,6 +466,108 @@ WP.UI = (function () {
     $('ctlset').hidden = !on;
     csWait = null; csMsg = ''; WP.Input.cancelCapture();
     if (on) { csTab = isTouch ? 'touch' : 'keys'; renderCtl(); }
+  }
+
+  // ---------- Своя раскладка сенсорных кнопок: место и размер каждой ----------
+  // Хранится как { id: [x, y, s] }: центр кнопки в долях ширины/высоты экрана и масштаб — подходит любому телефону
+  const TL_KEY = 'polo25_touchLayout';
+  let tl = null, tlEdit = null;
+  try { tl = JSON.parse(localStorage.getItem(TL_KEY) || 'null'); } catch (e) { tl = null; }
+  const TL_NAMES = { stick: 'Стик', fake: 'Кач', lob: 'Разрез / Блок', sprint: 'Рывок', foul: 'Фол / Руки', pass: 'Пас', shoot: 'Бросок / Отбор', play: 'Заслон', drive: 'Проход' };
+  const tlEls = () => { const T = $('touch'); return [T.querySelector('#stick')].concat(Array.from(T.querySelectorAll('.tbtns button'))); };
+  const tlId = (el) => el.id === 'stick' ? 'stick' : el.dataset.k;
+  function tlApply() {
+    $('touch').classList.toggle('custom', !!tl);
+    for (const el of tlEls()) {
+      const v = tl && tl[tlId(el)];
+      if (v) { el.style.left = (v[0] * 100).toFixed(2) + 'vw'; el.style.top = (v[1] * 100).toFixed(2) + 'vh'; el.style.setProperty('--s', v[2]); }
+      else { el.style.left = ''; el.style.top = ''; el.style.removeProperty('--s'); }
+    }
+  }
+  function tlSave(v) {
+    tl = v;
+    try { if (v) localStorage.setItem(TL_KEY, JSON.stringify(v)); else localStorage.removeItem(TL_KEY); } catch (e) { /* хранилище недоступно */ }
+    tlApply();
+  }
+  // Стартовая раскладка для редактора — как кнопки стоят сейчас (со всеми настройками размера и «для левши»)
+  function tlMeasure() {
+    const out = {}, W = innerWidth, H = innerHeight;
+    for (const el of tlEls()) {
+      const r = el.getBoundingClientRect();
+      out[tlId(el)] = [+((r.left + r.width / 2) / W).toFixed(4), +((r.top + r.height / 2) / H).toFixed(4), +(r.height / (el.offsetHeight || r.height)).toFixed(2)];
+    }
+    return out;
+  }
+  function tlSelect(el) {
+    tlEls().forEach(e => e.classList.toggle('te-sel', e === el));
+    tlEdit.sel = el;
+    const v = el && tl[tlId(el)];
+    $('teName').textContent = el ? TL_NAMES[tlId(el)] || '' : 'Перетащи кнопку пальцем';
+    $('teSize').disabled = !el;
+    $('teSize').value = v ? Math.round(v[2] * 100) : 100;
+    $('teVal').textContent = v ? Math.round(v[2] * 100) + '%' : '—';
+  }
+  function tlLabels() {
+    const L = TOUCH_LBL.att;
+    $('touch').querySelectorAll('.tbtns button:not(.tplay)').forEach((b) => { const slot = b.dataset.slot || (b.dataset.slot = b.dataset.b); b.innerHTML = L[slot] || TL_NAMES[slot] || ''; b.classList.remove('off'); });
+    $('touch').querySelectorAll('.tplay').forEach(b => b.classList.remove('off'));
+  }
+  function tlOpen() {
+    const T = $('touch');
+    tlEdit = { hidden: T.hidden, sel: null, dirty: false };
+    T.hidden = false;
+    WP.Input.touchEdit(true);
+    tlLabels();
+    if (!tl) { tl = null; tlApply(); tl = tlMeasure(); }
+    tlApply();
+    T.classList.add('editing'); $('tedit').hidden = false;
+    tlSelect(null);
+  }
+  function tlClose() {
+    const T = $('touch');
+    if (tlEdit.dirty) tlSave(tl);
+    else { try { tl = JSON.parse(localStorage.getItem(TL_KEY) || 'null'); } catch (e) { tl = null; } tlApply(); }
+    T.classList.remove('editing'); $('tedit').hidden = true;
+    T.hidden = tlEdit.hidden;
+    tlEls().forEach(e => e.classList.remove('te-sel'));
+    WP.Input.touchEdit(false);
+    tlEdit = null; touchMode = '';
+    if (match) updateTouch(match);
+    showCtl(true);
+  }
+  function tlBind() {
+    const T = $('touch');
+    let drag = null;
+    T.addEventListener('pointerdown', (e) => {
+      if (!tlEdit) return;
+      const el = e.target.closest('#stick, .tbtns button'); if (!el) return;
+      e.preventDefault(); e.stopPropagation();
+      tlSelect(el);
+      const v = tl[tlId(el)];
+      drag = { el, id: e.pointerId, dx: v[0] * innerWidth - e.clientX, dy: v[1] * innerHeight - e.clientY };
+      try { el.setPointerCapture(e.pointerId); } catch (er) { /* старые браузеры */ }
+    }, true);
+    T.addEventListener('pointermove', (e) => {
+      if (!tlEdit || !drag || e.pointerId !== drag.id) return;
+      const v = tl[tlId(drag.el)];
+      v[0] = +Math.min(0.97, Math.max(0.03, (e.clientX + drag.dx) / innerWidth)).toFixed(4);
+      v[1] = +Math.min(0.97, Math.max(0.03, (e.clientY + drag.dy) / innerHeight)).toFixed(4);
+      tlEdit.dirty = true; tlApply();
+    }, true);
+    const end = (e) => { if (drag && e.pointerId === drag.id) drag = null; };
+    T.addEventListener('pointerup', end, true); T.addEventListener('pointercancel', end, true);
+    // Тап по пустому месту снимает выбор
+    $('tedit').addEventListener('pointerdown', (e) => { if (tlEdit && e.target === $('tedit')) tlSelect(null); });
+    $('teSize').addEventListener('input', () => {
+      if (!tlEdit || !tlEdit.sel) return;
+      const v = tl[tlId(tlEdit.sel)]; v[2] = $('teSize').value / 100;
+      $('teVal').textContent = $('teSize').value + '%'; tlEdit.dirty = true; tlApply();
+    });
+    const all = (k) => { for (const id in tl) tl[id][2] = +Math.min(1.8, Math.max(0.5, tl[id][2] * k)).toFixed(2); tlEdit.dirty = true; tlApply(); tlSelect(tlEdit.sel); };
+    $('teAllM').addEventListener('click', () => all(1 / 1.1));
+    $('teAllP').addEventListener('click', () => all(1.1));
+    $('teReset').addEventListener('click', () => { tlSave(null); tl = tlMeasure(); tlEdit.dirty = false; tlApply(); tlSelect(null); });
+    $('teDone').addEventListener('click', tlClose);
   }
 
   // ---------- Тактика и замены ----------
@@ -498,11 +604,12 @@ WP.UI = (function () {
     const subsRo = ro || !!(match.cfg.net && match.cfg.net.role === 'guest');
     const hum = match.teams.filter(t => t.human);
     $('tacTeams').innerHTML = hum.length > 1 ? hum.map((t, i) => '<button data-t="team" data-v="' + i + '" aria-pressed="' + (i === tacSide) + '">' + t.code + '</button>').join('') : '<span class="muted small">' + team.name + '</span>';
-    let L = ro ? '<p class="small muted">В карьере игрока тактику и замены выбирает тренер. Заслон можно попросить в игре кнопкой ' + WP.Input.kbd('play') + '.</p>' : '';
+    let L = ro ? '<p class="small muted">В карьере игрока тактику и замены выбирает тренер. Заслон и проход можно попросить в игре кнопками ' + WP.Input.kbd('play') + ' и ' + WP.Input.kbd('drive') + '.</p>' : '';
     for (const k of ['att', 'pp', 'def', 'move']) {
       const g = TAC[k], cur = g.opts.find(o => o[0] === team.tac[k]) || g.opts[0];
       L += '<div class="tac-sec"><div class="tac-lbl">' + g.label + '</div><div class="seg">' + g.opts.map(o => '<button data-t="' + k + '" data-v="' + o[0] + '" aria-pressed="' + (o[0] === cur[0]) + '"' + (ro ? ' disabled' : '') + '>' + o[1] + '</button>').join('') + '</div><p class="small muted">' + cur[2] + '</p>' + (k === 'att' ? formSvg(team) : '') + '</div>';
     }
+    L += '<div class="tac-sec"><div class="tac-lbl">Розыгрыш «проход» — кнопка ' + WP.Input.kbd('drive') + '</div><p class="small muted">Восьмёрка на фланге: партнёр с 5–6 м уходит к воротам на 2 м, а тот, кто стоял на 2 м с этого фланга, выходит на его место на 6 м. Опекун проходящего на миг теряет его — отдай пас на ход, стрелка укажет. Если проход закрыли, открытым часто остаётся вышедший на 6 м. Соперник тоже так играет.</p></div>';
     L += '<div class="tac-sec"><div class="tac-lbl">Розыгрыш «заслон» — кнопка ' + WP.Input.kbd('play') + '</div><p class="small muted">Партнёр встаёт корпусом между защитником и воротами (спиной к защитнику), игрок обходит заслон и уходит к воротам — отдай ему пас, стрелка сама укажет на открывшегося. Если защита переключилась, открывается сам заслоняющий. Соперник тоже разыгрывает заслоны.</p></div>';
     $('tacLeft').innerHTML = L;
     const stam = (p) => '<span class="tac-st"><i style="width:' + Math.round(p.stamina * 100) + '%" class="' + (p.stamina < 0.35 ? 'lo' : p.stamina < 0.6 ? 'mid' : '') + '"></i></span>';
@@ -634,7 +741,7 @@ WP.UI = (function () {
       else if (m.state === 'penalty' && rs && rs.taker === p) hint = 'Пенальти: ' + K('left') + '/' + K('right') + ' — угол, ' + K('shoot') + ' — бросок сразу, без финта';
       else if (rs && rs.type === 'throwoff' && rs.taker === p) hint = 'Ввод из центра: ' + K('pass') + ' — пас партнёру';
       else if (rs && rs.taker === p && rs.allowShot && rs.ready) hint = 'Штрафной из-за 6 м: можно сразу бросать ' + K('shoot') + ' · ' + K('pass') + ' пас · поплыть — ввести мяч';
-      else if (p && p.hasBall) hint = K('pass') + ' пас, держи — резкий · ' + K('thru') + ' разрез, держи — прицел · ' + K('shoot') + ' бросок · ' + K('lob') + ' парашют · ' + K('fake') + ' кач · ' + K('foul') + ' фол · ' + K('play') + ' заслон · ' + K('tac') + ' тактика';
+      else if (p && p.hasBall) hint = K('pass') + ' пас, держи — резкий · ' + K('thru') + ' разрез, держи — прицел · ' + K('shoot') + ' бросок · ' + K('lob') + ' парашют · ' + K('fake') + ' кач · ' + K('foul') + ' фол · ' + K('play') + ' заслон · ' + K('drive') + ' проход · ' + K('tac') + ' тактика';
       else if (!p && m.cfg.pc) hint = m.cfg.pc.enter && m.period < m.cfg.pc.enter ? 'Ты на скамейке — выход в ' + m.cfg.pc.enter + '-м периоде · ⏩ перемотать' : 'Ты вне игры';
       else if (m.state === 'intro' || m.state === 'sprint') hint = 'Спринт: плывите к мячу ' + WP.Input.moveKbd() + ' + ' + K('sprint');
       else hint = K('pass') + (m.cfg.pc ? ' «Дай!» — попросить мяч' : ' сменить игрока') + ' · держи ' + K('foul') + ' — руки вверх, без фола · ' + K('shoot') + ' отбор · ' + K('lob') + ' блок · комбо ' + K('lob') + '→' + K('shoot') + '→' + K('shoot') + ' — чистый вынос';
@@ -669,13 +776,13 @@ WP.UI = (function () {
     const p = m.controlled.p1;
     const h = m.ball.holder;
     const mode = p && p.hasBall ? 'att' : m.cfg.pc && h && p && h.team === p.team ? 'call' : 'def';
-    const pb = $('touch').querySelector('[data-b="play"]');
-    if (pb) pb.classList.toggle('off', mode === 'def');
+    if (tlEdit) return;
+    $('touch').querySelectorAll('.tplay').forEach((b) => b.classList.toggle('off', mode === 'def'));
     if (mode === touchMode) return;
     touchMode = mode;
     const L = TOUCH_LBL[mode];
     $('touch').querySelector('.tbtns').classList.toggle('def', mode !== 'att');
-    $('touch').querySelectorAll('.tbtns button:not([data-b="play"])').forEach((b) => {
+    $('touch').querySelectorAll('.tbtns button:not(.tplay)').forEach((b) => {
       const slot = b.dataset.slot || (b.dataset.slot = b.dataset.b);
       const t = L[slot]; b.innerHTML = t || ''; b.classList.toggle('off', !t);
       // Кнопка «Парашют/Блок»: в атаке это «Разрез» (пас в разрез), в защите — «Блок»

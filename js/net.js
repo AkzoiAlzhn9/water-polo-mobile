@@ -7,7 +7,7 @@ WP.Net = (function () {
   const ACT = ['windup', 'release', 'fake', 'block', 'steal', 'catch', 'celebrate', 'dive', 'drawfoul', 'pass'];
   const STY = ['over', 'side', 'flick', 'back'];
   const STATES = ['intro', 'sprint', 'live', 'dead', 'goal', 'break', 'final', 'timeout', 'penalty'];
-  const CNT = ['pass', 'shootP', 'lob', 'skipP', 'fake', 'foul', 'play', 'sub', 'thru', 'lobpass', 'timeout', 'challenge'];
+  const CNT = ['pass', 'shootP', 'lob', 'skipP', 'fake', 'foul', 'play', 'sub', 'thru', 'lobpass', 'timeout', 'challenge', 'drive']; // новые — только в конец: у старой версии у соперника номера не сдвинутся
   const HELD = ['passD', 'shootD', 'skipD', 'foulD', 'thruD', 'fakeD', 'sprintK', 'sprint'];
   const r2 = (v) => Math.round(v * 100) / 100;
   const $ = (id) => document.getElementById(id);
