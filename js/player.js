@@ -191,13 +191,30 @@
 
   // Тело из Blender (js/body-model.js): общие массивы, карты нормалей и затенения; геометрия — под телосложение
   let BODY = null;
+  const dec = (b64, T) => { const b = atob(b64), u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return new T(u.buffer); };
+  const tex = (url) => { const t = new THREE.TextureLoader().load(url); t.anisotropy = 4; return t; };
   function bodyData() {
     if (BODY) return BODY;
     const D = WP.BODY;
-    const dec = (b64, T) => { const b = atob(b64), u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return new T(u.buffer); };
-    const tex = (url) => { const t = new THREE.TextureLoader().load(url); t.anisotropy = 4; return t; };
     BODY = { pos: dec(D.pos, Float32Array), nrm: dec(D.nrm, Int8Array), uv: dec(D.uv, Float32Array), idx: dec(D.idx, Uint16Array), ji: dec(D.ji, Uint8Array), jw: dec(D.jw, Uint8Array), normalMap: tex(D.normalMap), aoMap: tex(D.aoMap) };
     return BODY;
+  }
+  // Голова из Blender: кожа лица с картами, глаза (белок и радужка), брови, борода, шапочка по форме головы
+  let HEADM = null;
+  function headModel() {
+    if (HEADM) return HEADM;
+    const H = WP.BODY.head;
+    const geo = (d) => {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(dec(d.pos, Float32Array), 3));
+      g.setAttribute('normal', new THREE.BufferAttribute(dec(d.nrm, Int8Array), 3, true));
+      if (d.uv) g.setAttribute('uv', new THREE.BufferAttribute(dec(d.uv, Float32Array), 2));
+      g.setIndex(new THREE.BufferAttribute(dec(d.idx, Uint16Array), 1));
+      if (d.groups) for (const [st, c, m] of d.groups) g.addGroup(st, c, m);
+      return g;
+    };
+    HEADM = { skin: geo(H.skin), cap: geo(H.cap), beard: geo(H.beard), brows: geo(H.brows), eyes: geo(H.eyes), normalMap: tex(H.normalMap), aoMap: tex(H.aoMap) };
+    return HEADM;
   }
   // Телосложение bw: торс шире, плечи и бёдра расходятся, руки и ноги толще вокруг своей оси (смешивание по весам костей)
   const BGC = {};
@@ -260,6 +277,12 @@
     if (MC[k]) return MC[k];
     const B = bodyData();
     return (MC[k] = WP.underwaterify(new THREE.MeshPhysicalMaterial({ color: hex, map: skinTex(), normalMap: B.normalMap, aoMap: B.aoMap, aoMapIntensity: 1.0, roughness: 0.46, clearcoat: 0.45, clearcoatRoughness: 0.3, sheen: 0.2, sheenRoughness: 0.7, sheenColor: new THREE.Color(0xffe2cc) })));
+  }
+  function skinHeadMat(hex) {
+    const k = 'skinH' + hex;
+    if (MC[k]) return MC[k];
+    const H = headModel();
+    return (MC[k] = WP.underwaterify(new THREE.MeshPhysicalMaterial({ color: hex, map: skinTex(), normalMap: H.normalMap, aoMap: H.aoMap, aoMapIntensity: 1.0, roughness: 0.5, clearcoat: 0.35, clearcoatRoughness: 0.35, sheen: 0.2, sheenRoughness: 0.7, sheenColor: new THREE.Color(0xffe2cc) })));
   }
   // Кожа неоднородная: лёгкие пятна и поры, чтобы не выглядела пластиком (текстура общая, тон — цветом материала)
   let SKT = null;
@@ -420,17 +443,28 @@
       const neck = new THREE.Group(); neck.position.y = 0.09; body.add(neck);
       if (!sk) add(neck, s.neck, mSkin, 0, 0.03, 0);
       const headG = new THREE.Group(); headG.position.y = 0.14; headG.scale.setScalar(0.93); neck.add(headG); // голова чуть меньше — плечи кажутся мощнее
-      const HG = headGeo();
-      add(headG, HG.head, mSkin);
       // Борода или щетина — у части игроков
       const hb = WP.hash(this.name + 'beard');
-      if (hb < 0.4) add(headG, HG.beard, plainMat(new THREE.Color(skin).lerp(new THREE.Color(HAIR[Math.floor(hb * 10) % HAIR.length]), hb < 0.2 ? 0.8 : 0.5).getHex(), 0.95));
-      for (const zs of [-1, 1]) {
-        add(headG, s.ball, mDark, 0.088, 0.014, zs * 0.034, 0.008, 0.009, 0.011);   // глаза в глазницах
-        const b = add(headG, s.ball, mBrow, 0.106, 0.036, zs * 0.034, 0.006, 0.004, 0.02); // брови по надбровью
-        b.rotation.x = zs * 0.12;
+      const mBeard = plainMat(new THREE.Color(skin).lerp(new THREE.Color(HAIR[Math.floor(hb * 10) % HAIR.length]), hb < 0.2 ? 0.8 : 0.5).getHex(), 0.95);
+      if (sk && WP.BODY.head) {
+        const HM = headModel();
+        add(headG, HM.skin, skinHeadMat(skin));
+        if (hb < 0.4) add(headG, HM.beard, mBeard);
+        add(headG, HM.brows, mBrow);
+        add(headG, HM.eyes, [plainMat(0xd9d1c5, 0.25), plainMat(0x2a1c14, 0.2)]);
+        mCap.map.wrapS = THREE.RepeatWrapping; // шов развёртки шапочки — на затылке, номер пересекает его
+        add(headG, HM.cap, mCap);
+      } else {
+        const HG = headGeo();
+        add(headG, HG.head, mSkin);
+        if (hb < 0.4) add(headG, HG.beard, mBeard);
+        for (const zs of [-1, 1]) {
+          add(headG, s.ball, mDark, 0.088, 0.014, zs * 0.034, 0.008, 0.009, 0.011);   // глаза в глазницах
+          const b = add(headG, s.ball, mBrow, 0.106, 0.036, zs * 0.034, 0.006, 0.004, 0.02); // брови по надбровью
+          b.rotation.x = zs * 0.12;
+        }
+        add(headG, HG.cap, mCap);
       }
-      add(headG, HG.cap, mCap);
       for (const zs of [-1, 1]) {
         const e = add(headG, s.ear, mEar, -0.012, -0.012, zs * 0.094, 1.05, 1.0, 1.25);
         e.rotation.x = zs > 0 ? 0 : Math.PI;

@@ -149,8 +149,10 @@
     if (phase !== ai.phase) {
       if (!(phase === 'loose' || (ai.phase === 'loose' && phase === ai.lastSolid))) {
         ai.phaseT = 0;
-        // Потерявшие мяч не сразу разворачиваются назад (~0,5 с) — у атакующих появляется шанс на отрыв
-        if (phase === 'defense' && match.state === 'live') ai.turnT = 0.4 + 0.25 * (1 - team.ai.aggr);
+        // Потерявшие мяч не сразу разворачиваются назад (~0,4 с) — у атакующих появляется шанс на отрыв
+        if (phase === 'defense' && match.state === 'live') ai.turnT = 0.3 + 0.2 * (1 - team.ai.aggr);
+        // Переход в защиту: сначала все отплывают «бункером» к своим воротам, потом разбирают соперников
+        if (phase === 'defense') { ai.bunker = true; ai.bunkerT = 0; }
       }
       if (phase !== 'loose') ai.lastSolid = phase;
       ai.phase = phase; ai.dirty = true;
@@ -338,6 +340,7 @@
     const ownX = -team.dir * R.HALF_L;
     const rs = match.state === 'dead' ? match.restart : null;
     const carrier = ball.holder && ball.holder.team === opp ? ball.holder : (rs && rs.taker && rs.team === opp ? rs.taker : null);
+    if (ai.bunker && AI.bunkerStep(match, team, field, attackers, carrier)) return;
     if (field.length < attackers.length) {
       const Z = field.length >= 5 ? Z5 : field.length === 4 ? Z4 : Z3;
       const shift = clamp(ball.pos.z * 0.22, -1, 1);
@@ -449,6 +452,69 @@
         if ((shooting && Math.random() < 0.9) || (gd < 8 && carrier.holdMode === 'hold' && Math.random() < 0.08)) match.doBlock(d);
       }
     }
+  };
+
+  // Отход «бункером»: после потери мяча все плывут к своим воротам и встают плотным блоком на 2–6 м,
+  // глядя на мяч. Кто из соперников оказался глубже блока, того берёт ближайший защитник, успевший встать между ним
+  // и воротами. Когда блок собрался и атака подплыла (или прошло ~7 с), каждый разбирает своего — дальше опека.
+  const BUNK = [[2.2, 0], [3.8, 1.7], [3.8, -1.7], [5.3, 3.1], [5.3, -3.1], [5.8, 0]];
+  AI.bunkerStep = function (match, team, field, attackers, carrier) {
+    const ai = team.ai, opp = team.opp, ball = match.ball;
+    ai.bunkerT = (ai.bunkerT || 0) + 0.15;
+    const gd = (p) => AI.goalDist(opp, p.x, p.z);
+    const tac = team.tac ? team.tac.def : 'man';
+    const pressing = tac === 'press' || (match.period === 4 && match.clock < 75 && team.score < opp.score);
+    const cGD = carrier ? gd(carrier) : 99;
+    const settled = field.every(d => gd(d) < 7.4);
+    if (pressing || field.length < 3 || ai.phaseT > 7.5 || (settled && ai.phaseT > 1.2 && (cGD < 9.5 || ai.phaseT > 4.5))) {
+      ai.bunker = false; ai.dirty = true; ai.markT = 0;
+      return false;
+    }
+    const shift = clamp(ball.pos.z * 0.2, -1, 1);
+    const slots = BUNK.slice(0, field.length).map(s => { const a = AI.att(opp, s[0], s[1]); a.z += shift; return a; });
+    if (ai.zoneKey !== 'b' + field.length || ai.dirty || field.some(p => p.zslot === undefined || p.zslot >= slots.length)) {
+      const map = assignSlots(team, field, slots, slots.map(() => 'z'));
+      for (const p of field) p.zslot = map.get(p);
+      ai.zoneKey = 'b' + field.length; ai.dirty = false;
+    }
+    // Подхват: соперник глубже 8 м — его берёт ближайший защитник со стороны ворот (если такой рядом),
+    // игрока с мячом у ворот — всегда кто-то, пусть и вдогонку
+    const taken = new Map(), freeD = new Set(field.filter(d => !(d.ctrl && d.input.active)));
+    const deep = attackers.filter(a => gd(a) < 8).sort((a, b) => gd(a) - gd(b));
+    for (const a of deep) {
+      let best = null, bc = 1e9;
+      for (const d of freeD) {
+        const c = Math.hypot(d.x - a.x, d.z - a.z) + (gd(d) < gd(a) + 0.6 ? 0 : 3);
+        if (c < bc) { bc = c; best = d; }
+      }
+      if (!best) break;
+      if (bc < 4.5 || (a === carrier && cGD < 7.5)) { taken.set(best, a); freeD.delete(best); }
+    }
+    const gx = -team.dir * R.HALF_L;
+    for (const d of field) {
+      if (d.ctrl && d.input.active) continue;
+      const a = taken.get(d);
+      let tx, tz;
+      if (a) {
+        const vx = gx - a.x, vz = -a.z, L = Math.hypot(vx, vz) || 1, dd = a === carrier ? 0.78 : 0.6;
+        tx = a.x + vx / L * dd + a.vx * 0.4; tz = a.z + vz / L * dd + a.vz * 0.4;
+        d.faceTo = a === carrier ? a : ball.pos; d.liftTarget = a === carrier ? 0.35 : 0.15;
+        if (a === carrier) {
+          const shooting = carrier.action && carrier.action.type === 'windup';
+          if (shooting && Math.hypot(carrier.x - d.x, carrier.z - d.z) < 3.2 && Math.random() < 0.9) match.doBlock(d);
+        }
+      } else {
+        const sl = slots[d.zslot] || slots[0];
+        tx = sl.x; tz = sl.z;
+        // Пока плывёт назад — смотрит по ходу; в блоке — на мяч
+        d.faceTo = gd(d) < 7.5 ? ball.pos : null; d.liftTarget = 0.15;
+        if (carrier && Math.hypot(carrier.x - d.x, carrier.z - d.z) < 3.2 && carrier.action && carrier.action.type === 'windup') match.doBlock(d);
+      }
+      if (d.screenT > 0) { tx = d.x; tz = d.z; }
+      d.target = { x: tx, z: tz }; d.mark = a || null;
+      d.moveMode = Math.hypot(tx - d.x, tz - d.z) > 2 ? 'sprint' : 'swim';
+    }
+    return true;
   };
 
   AI.looseChase = function (match, team, field) {
