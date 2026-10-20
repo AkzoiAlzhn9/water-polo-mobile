@@ -27,6 +27,22 @@
     return t;
   }
   WP.canvasTex = canvasTex;
+  // Склеить индексированные геометрии (position, normal, uv) в одну — один меш вместо сотен коробок
+  function mergeGeos(list) {
+    let nv = 0, ni = 0;
+    for (const g of list) { nv += g.attributes.position.count; ni += g.index.count; }
+    const pos = new Float32Array(nv * 3), nor = new Float32Array(nv * 3), uv = new Float32Array(nv * 2), idx = new Uint32Array(ni);
+    let vo = 0, io = 0;
+    for (const g of list) {
+      pos.set(g.attributes.position.array, vo * 3); nor.set(g.attributes.normal.array, vo * 3); uv.set(g.attributes.uv.array, vo * 2);
+      const ix = g.index.array; for (let i = 0; i < ix.length; i++) idx[io + i] = ix[i] + vo;
+      vo += g.attributes.position.count; io += ix.length;
+    }
+    const out = new THREE.BufferGeometry();
+    out.setAttribute('position', new THREE.BufferAttribute(pos, 3)); out.setAttribute('normal', new THREE.BufferAttribute(nor, 3)); out.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+    out.setIndex(new THREE.BufferAttribute(idx, 1));
+    return out;
+  }
 
   const FLOOR_VS = `
     varying vec3 vW;
@@ -433,65 +449,205 @@
       return g;
     }
 
+    // Стадион-чаша: четыре трибуны по секторам — лестницы-проходы с жёлтой кромкой, цветные кресла (VIP в центре длинной
+    // трибуны, фан-сектора за воротами в цветах команд), тоннели-входы, таблички секторов, стеклянный барьер над LED-рекламой,
+    // променад с LED-лентой, верхний ярус, фермы крыши с прожекторами, флаги. Бетон, ступени, стены, металл и стекло
+    // склеены в несколько мешей; кресла и зрители — инстансы (зритель сидит на кресле, пустые кресла видны отдельно).
     buildArena() {
-      const s = this.scene;
-      const wallMat = new THREE.MeshStandardMaterial({ color: 0x14212e, roughness: 0.9 });
-      const back = new THREE.Mesh(new THREE.PlaneGeometry(70, 26), wallMat); back.position.set(0, 12, -27); s.add(back);
-      for (const sx of [-1, 1]) { const w = new THREE.Mesh(new THREE.PlaneGeometry(60, 26), wallMat); w.position.set(sx * 28, 12, 0); w.rotation.y = -sx * Math.PI / 2; s.add(w); }
-      const ceil = new THREE.Mesh(new THREE.PlaneGeometry(70, 60), new THREE.MeshStandardMaterial({ color: 0x0c141d, roughness: 1 }));
-      ceil.rotation.x = Math.PI / 2; ceil.position.set(0, 18, 0); s.add(ceil);
-      const lampMat = new THREE.MeshBasicMaterial({ color: 0xfff6e2 });
-      for (let x = -21; x <= 21; x += 7) for (const z of [-9, 0, 9]) {
-        const l = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.12, 2.4), lampMat); l.position.set(x, 17.8, z); s.add(l);
+      const s = this.scene, deckY = 0.3, ROOF = 22;
+      const G = { concrete: [], aisle: [], nose: [], wall: [], metal: [], dark: [], led: [], ledUp: [], glass: [], signs: [] };
+      const seats = [], peopleLo = [], peopleUp = [], fans = [[], []], banners = [];
+      const rotY = (a) => new THREE.Matrix4().makeRotationY(a);
+      const at = (m, x, y, z) => new THREE.Vector3(x, y, z).applyMatrix4(m);
+      const box = (list, w, h, d, x, y, z, m) => { const g = new THREE.BoxGeometry(w, h, d); g.translate(x, y, z); g.applyMatrix4(m); list.push(g); return g; };
+      // Плоскость лицом к бассейну (в осях трибуны бассейн — в сторону −z); us — во сколько раз повторить текстуру по длине
+      const face = (list, w, h, x, y, z, m, us) => {
+        const g = new THREE.PlaneGeometry(w, h); g.rotateY(Math.PI); g.translate(x, y, z);
+        if (us) { const uv = g.attributes.uv; for (let k = 0; k < uv.count; k++) uv.setX(k, uv.getX(k) * us); }
+        g.applyMatrix4(m); list.push(g); return g;
+      };
+      const signText = [];
+      const sign = (m, x, y, z, text) => {
+        const g = face(G.signs, 1.4, 0.38, x, y, z, m), i = signText.length, cx = i % 8, cy = Math.floor(i / 8), uv = g.attributes.uv;
+        for (let k = 0; k < uv.count; k++) uv.setXY(k, (cx + uv.getX(k)) / 8, 1 - (cy + 1 - uv.getY(k)) / 8);
+        signText.push(text);
+      };
+      const PAL = {
+        side: ['#1f5fae', '#16427e'], vip: '#b3202d', end: ['#0f7c8c', '#0b5966'], up: ['#2d4f78', '#233f60'],
+      };
+      let secN = [101, 201];
+      // Трибуна в своих осях: x — вдоль, z — от бассейна назад, y — вверх; m — куда её поставить
+      const stand = (m, o) => {
+        const L = o.L, aw = 1.1, sw = 6.4, ry = o.ry;
+        const nS = Math.max(1, Math.floor((L + aw) / (sw + aw))), used = nS * sw + (nS - 1) * aw, x0 = -used / 2;
+        const secX = (i) => x0 + i * (sw + aw);
+        let z = 0, y = deckY;
+        o.tiers.forEach((t, ti) => {
+          const fh = t.front, yb = y + fh;
+          // Передняя стенка яруса: внизу LED-реклама, над ней таблички секторов; у нижнего яруса — стекло с поручнем
+          box(G.wall, L, fh, 0.3, 0, y + fh / 2, z + 0.15, m);
+          face(ti === 0 ? G.led : G.ledUp, L, ti === 0 ? 0.62 : 0.55, 0, y + (ti === 0 ? 0.4 : fh * 0.42), z - 0.012, m, L / (ti === 0 ? 15 : 12));
+          if (ti === 0) {
+            face(G.glass, L, 1.0, 0, yb + 0.5, z + 0.05, m);
+            box(G.metal, L, 0.06, 0.09, 0, yb + 1.0, z + 0.05, m);
+          }
+          for (let r = 0; r < t.rows; r++) {
+            const ty = yb + r * t.h, tz = z + 0.3 + r * t.d;
+            box(G.concrete, L, t.h, t.d, 0, ty - t.h / 2, tz + t.d / 2, m);
+            for (let a = 1; a < nS; a++) {
+              const ax = secX(a) - aw / 2;
+              box(G.aisle, aw, t.h / 2, t.d / 2, ax, ty + t.h / 4, tz + t.d * 0.75, m);   // промежуточная ступень прохода
+              box(G.nose, aw, 0.025, 0.05, ax, ty + 0.012, tz + 0.03, m);
+              box(G.nose, aw, 0.025, 0.05, ax, ty + t.h / 2 + 0.012, tz + t.d / 2 + 0.03, m);
+            }
+          }
+          // Секторы: кресла, тоннель-вход посередине каждого второго сектора нижнего яруса, табличка с номером
+          for (let i = 0; i < nS; i++) {
+            const sx = secX(i), sc = sx + sw / 2, vip = o.vip && ti === 0 && i === (nS >> 1);
+            const col = vip ? PAL.vip : ti > 0 ? PAL.up[i % 2] : (o.end ? PAL.end : PAL.side)[i % 2];
+            const vom = ti === 0 && i % 2 === 1 && !vip, vr = Math.floor(t.rows / 2) - 1;
+            if (vom) {
+              const tz = z + 0.3 + vr * t.d;
+              face(G.dark, 2.0, t.h * 2 + 0.25, sc, yb + vr * t.h + 0.05, tz - 0.02, m);
+              for (const e of [-1, 1]) box(G.metal, 0.05, 0.9, t.d * 2.2, sc + e * 1.08, yb + (vr + 2) * t.h + 0.45, tz + t.d, m);
+            }
+            sign(m, sc, y + fh - 0.24, z - 0.02, o.code + ' ' + secN[ti]++);
+            const fan = o.fan !== undefined && ti === 0, occ = vip ? 0.55 : ti > 0 ? 0.58 : fan ? 0.92 : 0.8;
+            for (let r = 0; r < t.rows; r++) {
+              const ty = yb + r * t.h, tz = z + 0.3 + r * t.d + t.d * 0.5;
+              if (vom && r >= vr && r < vr + 3) {
+                for (let sx2 = sx + 0.27; sx2 < sx + sw; sx2 += 0.54) if (Math.abs(sx2 - sc) > 1.15) (Math.random() < occ ? (ti ? peopleUp : peopleLo) : seats).push({ p: at(m, sx2, ty, tz), ry, col, fan: fan ? o.fan : -1 });
+                continue;
+              }
+              for (let sx2 = sx + 0.27; sx2 < sx + sw; sx2 += 0.54) (Math.random() < occ ? (ti ? peopleUp : peopleLo) : seats).push({ p: at(m, sx2, ty, tz), ry, col, fan: fan ? o.fan : -1 });
+            }
+          }
+          const top = yb + (t.rows - 1) * t.h;
+          z += 0.3 + t.rows * t.d;
+          if (ti < o.tiers.length - 1) {
+            // Променад между ярусами с перилами
+            box(G.concrete, L, 0.3, 2.4, 0, top - 0.15, z + 1.2, m);
+            box(G.metal, L, 0.05, 0.05, 0, top + 1.0, z + 0.06, m);
+            for (let px = -L / 2; px <= L / 2; px += 2.5) box(G.metal, 0.04, 1.0, 0.04, px, top + 0.5, z + 0.06, m);
+            z += 2.4;
+          } else {
+            box(G.wall, L, ROOF - top + 1, 0.3, 0, (top + ROOF) / 2, z + 0.15, m);   // задняя стена до крыши
+            o.back = { z, top };
+          }
+          y = top;
+        });
+        return o;
+      };
+      const TIERS = [{ rows: 11, d: 0.85, h: 0.48, front: 1.25 }, { rows: 10, d: 0.8, h: 0.6, front: 1.2 }];
+      // Длинные трибуны заходят в углы — чаша замкнута; торцевые стоят между ними
+      const far = stand(new THREE.Matrix4().makeTranslation(0, 0, -15.8).multiply(rotY(Math.PI)), { L: 78, tiers: TIERS, vip: true, code: 'A', ry: Math.PI });
+      stand(new THREE.Matrix4().makeTranslation(0, 0, 19), { L: 78, tiers: TIERS, vip: true, code: 'C', ry: 0 });
+      const zc = (19 - 15.8) / 2, LE = 19 + 15.8;
+      stand(new THREE.Matrix4().makeTranslation(-18.2, 0, zc).multiply(rotY(-Math.PI / 2)), { L: LE, tiers: TIERS, end: true, fan: 0, code: 'D', ry: -Math.PI / 2 });
+      stand(new THREE.Matrix4().makeTranslation(18.2, 0, zc).multiply(rotY(Math.PI / 2)), { L: LE, tiers: TIERS, end: true, fan: 1, code: 'B', ry: Math.PI / 2 });
+      this.boardAt = { z: -15.8 - far.back.z + 0.25, y: far.back.top + 4.2 };
+
+      // Крыша: тёмный потолок, фермы поперёк и прожекторы над бассейном
+      const ceil = new THREE.Mesh(new THREE.PlaneGeometry(90, 90), new THREE.MeshStandardMaterial({ color: 0x0b121a, roughness: 1 }));
+      ceil.rotation.x = Math.PI / 2; ceil.position.set(0, ROOF, 0); s.add(ceil);
+      const I = new THREE.Matrix4();
+      for (let x = -33; x <= 33; x += 6) {
+        box(G.metal, 0.3, 0.3, 74, x, ROOF - 1.6, 1.5, I); box(G.metal, 0.3, 0.3, 74, x, ROOF - 0.2, 1.5, I);
+        for (let zz = -34; zz <= 37; zz += 3) box(G.metal, 0.12, 1.5, 0.12, x, ROOF - 0.9, zz, I);
       }
-      // Ступени трибун
-      const stepMat = new THREE.MeshStandardMaterial({ color: 0x2a3644, roughness: 0.8 });
-      this.standRows = [];
-      for (let r = 0; r < 13; r++) {
-        const z = -16.4 - r * 0.8, y = 0.3 + r * 0.55;
-        const st = new THREE.Mesh(new THREE.BoxGeometry(46, 0.55, 0.8), stepMat); st.position.set(0, y + 0.27, z); s.add(st);
-        this.standRows.push({ kind: 'side', z, y: y + 0.55 });
+      const lampMat = new THREE.MeshBasicMaterial({ color: 0xfff6e2, toneMapped: false });
+      const lamps = [];
+      for (let x = -24; x <= 24; x += 6) for (let z = -12; z <= 15; z += 4.5) { const g = new THREE.BoxGeometry(0.9, 0.18, 0.9); g.translate(x, ROOF - 1.85, z); lamps.push(g); }
+      s.add(new THREE.Mesh(mergeGeos(lamps), lampMat));
+      // Флаги-баннеры под крышей над фан-секторами (цвет — команды, см. setFans)
+      for (const side of [0, 1]) for (let i = 0; i < 4; i++) {
+        const sx = side ? 1 : -1, mat = new THREE.MeshStandardMaterial({ color: side ? 0x1f4fd1 : 0xe8ecf0, roughness: 0.8, side: THREE.DoubleSide });
+        const b = new THREE.Mesh(new THREE.PlaneGeometry(3.2, 6), mat);
+        b.position.set(sx * 31, ROOF - 5.5, -9 + i * 6.2); b.rotation.y = Math.PI / 2; s.add(b);
+        banners.push({ mat, side, stripe: i % 2 });
       }
-      for (const sx of [-1, 1]) for (let r = 0; r < 8; r++) {
-        const x = sx * (18.5 + r * 0.8), y = 0.3 + r * 0.55;
-        const st = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.55, 28), stepMat); st.position.set(x, y + 0.27, -1.5); s.add(st);
-        this.standRows.push({ kind: 'end', x, y: y + 0.55, sx });
-      }
-      // Рекламные борта (нейтральные)
+
+      // Текстуры: LED-реклама нижнего яруса, LED-лента верхнего, таблички секторов
       const adTex = canvasTex(1024, 64, (g, w, h) => {
-        const grd = g.createLinearGradient(0, 0, w, 0); grd.addColorStop(0, '#0d2742'); grd.addColorStop(1, '#0b3a5a');
+        const grd = g.createLinearGradient(0, 0, w, 0); grd.addColorStop(0, '#0d2742'); grd.addColorStop(0.5, '#0b4a74'); grd.addColorStop(1, '#0d2742');
         g.fillStyle = grd; g.fillRect(0, 0, w, h);
         g.font = '700 38px "Fira Sans Extra Condensed", Arial Narrow, sans-serif'; g.fillStyle = '#e8f3ff'; g.textBaseline = 'middle';
         const items = ['WATER POLO MOBILE', 'WORLD AQUATICS RULES 2025', '28 · 18 · 15', 'ВОДНОЕ ПОЛО'];
-        let x = 20; let i = 0; while (x < w) { const t = items[i++ % items.length]; g.fillText(t, x, h / 2 + 2); x += g.measureText(t).width + 70; }
+        let x = 20, i = 0; while (x < w) { const t = items[i++ % items.length]; g.fillText(t, x, h / 2 + 2); x += g.measureText(t).width + 70; }
       });
-      adTex.wrapS = THREE.RepeatWrapping; adTex.repeat.set(3, 1);
-      const ad = new THREE.Mesh(new THREE.PlaneGeometry(44, 0.9), new THREE.MeshBasicMaterial({ map: adTex }));
-      ad.position.set(0, 0.75, -15.8); s.add(ad);
+      adTex.wrapS = THREE.RepeatWrapping;
+      const ribTex = canvasTex(1024, 64, (g, w, h) => {
+        const grd = g.createLinearGradient(0, 0, w, 0); grd.addColorStop(0, '#ff7a1a'); grd.addColorStop(0.5, '#ffb547'); grd.addColorStop(1, '#ff7a1a');
+        g.fillStyle = '#100a05'; g.fillRect(0, 0, w, h); g.fillStyle = grd; g.fillRect(0, 6, w, h - 12);
+        g.font = '800 36px "Fira Sans Extra Condensed", Arial Narrow, sans-serif'; g.fillStyle = '#1a0e04'; g.textBaseline = 'middle';
+        const items = ['GO!', 'WATER POLO MOBILE', 'DEFENCE!', 'ВОДНОЕ ПОЛО', 'GOAL'];
+        let x = 16, i = 0; while (x < w) { const t = items[i++ % items.length]; g.fillText(t, x, h / 2 + 2); x += g.measureText(t).width + 60; }
+      });
+      ribTex.wrapS = THREE.RepeatWrapping;
+      const signTex = canvasTex(1024, 512, (g, w, h) => {
+        g.clearRect(0, 0, w, h);
+        signText.forEach((t, i) => {
+          const x = (i % 8) * 128, y = Math.floor(i / 8) * 64;
+          g.fillStyle = '#f2f4f6'; g.fillRect(x + 4, y + 6, 120, 52);
+          g.fillStyle = '#12355f'; g.fillRect(x + 4, y + 6, 34, 52);
+          g.fillStyle = '#ffffff'; g.font = '800 30px "Fira Sans Extra Condensed", Arial Narrow, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+          g.fillText(t.split(' ')[0], x + 21, y + 33);
+          g.fillStyle = '#12355f'; g.fillText(t.split(' ')[1], x + 82, y + 33);
+        });
+      });
+      const MAT = {
+        concrete: new THREE.MeshStandardMaterial({ color: 0x46525e, roughness: 0.95 }),
+        aisle: new THREE.MeshStandardMaterial({ color: 0x9aa3ab, roughness: 0.9 }),
+        nose: new THREE.MeshStandardMaterial({ color: 0xe8c547, roughness: 0.6, emissive: 0x5a4a10, emissiveIntensity: 0.4 }),
+        wall: new THREE.MeshStandardMaterial({ color: 0x151d27, roughness: 0.85 }),
+        metal: new THREE.MeshStandardMaterial({ color: 0xc8d0d8, roughness: 0.35, metalness: 0.6 }),
+        dark: new THREE.MeshBasicMaterial({ color: 0x04060a }),
+        led: new THREE.MeshBasicMaterial({ map: adTex, toneMapped: false }),
+        ledUp: new THREE.MeshBasicMaterial({ map: ribTex, toneMapped: false }),
+        glass: new THREE.MeshStandardMaterial({ color: 0xbfe3ff, roughness: 0.05, metalness: 0.1, transparent: true, opacity: 0.16, depthWrite: false, side: THREE.DoubleSide }),
+        signs: new THREE.MeshBasicMaterial({ map: signTex, transparent: true }),
+      };
+      for (const k in G) if (G[k].length) s.add(new THREE.Mesh(mergeGeos(G[k]), MAT[k]));
+
+      // Пустые кресла: сиденье и спинка; занятые не рисуются — их закрывает зритель
+      const seatGeo = mergeGeos([new THREE.BoxGeometry(0.44, 0.07, 0.4).translate(0, 0.4, 0), new THREE.BoxGeometry(0.44, 0.46, 0.06).translate(0, 0.62, 0.21)]);
+      const seatMesh = new THREE.InstancedMesh(seatGeo, new THREE.MeshStandardMaterial({ roughness: 0.6 }), seats.length);
+      const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), one = new THREE.Vector3(1, 1, 1), c = new THREE.Color(), up = new THREE.Vector3(0, 1, 0);
+      seats.forEach((st, i) => { q.setFromAxisAngle(up, st.ry); m4.compose(st.p, q, one); seatMesh.setMatrixAt(i, m4); seatMesh.setColorAt(i, c.set(st.col)); });
+      s.add(seatMesh);
+      const people = peopleLo.concat(peopleUp);
+      this.spectators = people; this.nLowerCrowd = peopleLo.length; this.fanSeats = fans; this.banners = banners;
+      people.forEach((p, i) => { if (p.fan >= 0) fans[p.fan].push(i); });
     }
 
     buildCrowd() {
-      const seats = [];
-      for (const row of this.standRows) {
-        if (row.kind === 'side') { for (let x = -22; x <= 22; x += 0.58) if (Math.random() < 0.72) seats.push([x + (Math.random() - 0.5) * 0.1, row.y, row.z]); }
-        else { for (let z = -15; z <= 12; z += 0.58) if (Math.random() < 0.6) seats.push([row.x, row.y, z]); }
-      }
-      const n = seats.length;
-      const bodyGeo = new THREE.BoxGeometry(0.42, 0.55, 0.32);
-      const headGeo = new THREE.SphereGeometry(0.12, 8, 6);
+      const ppl = this.spectators, n = ppl.length;
+      const bodyGeo = new THREE.CylinderGeometry(0.15, 0.2, 0.62, 7);
+      const headGeo = new THREE.SphereGeometry(0.115, 7, 5);
       const bodies = new THREE.InstancedMesh(bodyGeo, new THREE.MeshLambertMaterial(), n);
       const heads = new THREE.InstancedMesh(headGeo, new THREE.MeshLambertMaterial(), n);
-      const palette = [0xd9d9d9, 0x2d4b8e, 0xc0392b, 0x1f1f1f, 0xe6b422, 0x2e7d32, 0x5d4037, 0x8e44ad, 0xffffff, 0x1565c0, 0x455a64];
+      const palette = [0xd9d9d9, 0x2d4b8e, 0xc0392b, 0x1f1f1f, 0xe6b422, 0x2e7d32, 0x5d4037, 0x8e44ad, 0xffffff, 0x1565c0, 0x455a64, 0xf57c00];
       const skins = [0xf1c7a5, 0xd9a47c, 0xa8704a, 0x7a4b2e, 0xf6d7bd];
       const c = new THREE.Color(), m = new THREE.Matrix4();
+      // Высота сиденья — 0.36 над ступенью (тело и голова в updateCrowd считаются от неё)
+      const seats = ppl.map(p => [p.p.x, p.p.y + 0.36, p.p.z]);
       this.crowd = { bodies, heads, seats, phase: seats.map(() => Math.random() * 6.28), amp: seats.map(() => 0.5 + Math.random()) };
       seats.forEach((p, i) => {
         m.makeTranslation(p[0], p[1] + 0.28, p[2]); bodies.setMatrixAt(i, m);
-        m.makeTranslation(p[0], p[1] + 0.68, p[2]); heads.setMatrixAt(i, m);
+        m.makeTranslation(p[0], p[1] + 0.72, p[2]); heads.setMatrixAt(i, m);
         bodies.setColorAt(i, c.set(palette[(Math.random() * palette.length) | 0]));
         heads.setColorAt(i, c.set(skins[(Math.random() * skins.length) | 0]));
       });
       this.scene.add(bodies, heads);
+    }
+
+    // Фан-сектора за воротами и флаги под крышей — в цветах команд (side 0 — слева, 1 — справа)
+    setFans(side, hex) {
+      if (!this.crowd || !this.fanSeats) return;
+      const c = new THREE.Color(), alt = new THREE.Color(0xffffff), b = this.crowd.bodies;
+      this.fanSeats[side].forEach((i, k) => b.setColorAt(i, k % 4 === 3 ? alt : c.set(hex)));
+      b.instanceColor.needsUpdate = true;
+      for (const f of this.banners) if (f.side === side) f.mat.color.set(f.stripe ? 0xffffff : hex);
     }
 
     cheer(big) { this.cheerT = big ? 3.5 : 1.5; }
@@ -506,7 +662,7 @@
         const p = seats[i];
         const j = k * Math.abs(Math.sin(this.time * 9 * (0.7 + amp[i] * 0.3) + phase[i])) * 0.28 * amp[i];
         m.makeTranslation(p[0], p[1] + 0.28 + j, p[2]); bodies.setMatrixAt(i, m);
-        m.makeTranslation(p[0], p[1] + 0.68 + j, p[2]); heads.setMatrixAt(i, m);
+        m.makeTranslation(p[0], p[1] + 0.72 + j, p[2]); heads.setMatrixAt(i, m);
       }
       bodies.instanceMatrix.needsUpdate = true; heads.instanceMatrix.needsUpdate = true;
       this.crowdDirty = this.cheerT > 0;
@@ -515,10 +671,12 @@
     buildBoards() {
       const s = this.scene;
       this.boardTex = canvasTex(1024, 400, () => {});
-      const scr = new THREE.Mesh(new THREE.PlaneGeometry(10, 3.9), new THREE.MeshBasicMaterial({ map: this.boardTex, toneMapped: false }));
-      scr.position.set(0, 12.2, -26.8); s.add(scr);
-      const frame = new THREE.Mesh(new THREE.BoxGeometry(10.4, 4.3, 0.3), new THREE.MeshStandardMaterial({ color: 0x0a0f14 }));
-      frame.position.set(0, 12.2, -27.0); s.add(frame);
+      // Большое табло — на задней стене над верхним ярусом длинной трибуны
+      const B = this.boardAt || { z: -26.8, y: 12.2 };
+      const scr = new THREE.Mesh(new THREE.PlaneGeometry(15, 5.85), new THREE.MeshBasicMaterial({ map: this.boardTex, toneMapped: false }));
+      scr.position.set(0, B.y, B.z + 0.2); s.add(scr);
+      const frame = new THREE.Mesh(new THREE.BoxGeometry(15.6, 6.4, 0.3), new THREE.MeshStandardMaterial({ color: 0x0a0f14 }));
+      frame.position.set(0, B.y, B.z); s.add(frame);
       this.shotBoards = [];
       for (const sx of [-1, 1]) {
         const tex = canvasTex(256, 128, () => {});
@@ -874,6 +1032,8 @@
     setQuality(pr, low) {
       this.renderer.setPixelRatio(pr);
       this.lowGfx = !!low;
+      // Слабый телефон: зрители верхнего яруса не рисуются (они почти не видны с камеры трансляции)
+      if (this.crowd) { const n = this.lowGfx ? this.nLowerCrowd : this.crowd.seats.length; this.crowd.bodies.count = n; this.crowd.heads.count = n; }
       this.resize();
     }
 

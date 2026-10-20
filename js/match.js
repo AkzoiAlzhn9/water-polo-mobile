@@ -100,6 +100,7 @@
         m.renderOrder = 3; m.visible = false; world.scene.add(world.overlay(m)); this.rings[id] = m;
       }
       this.teams.forEach((t, i) => world.setBench(i, t.capHex, t.bench.length));
+      this.teams.forEach((t, i) => world.setFans && world.setFans(i, t.suitHex));
       this.combo = { p1: { stage: 0, t: 0 }, p2: { stage: 0, t: 0 } };
       this.passCharge = { p1: null, p2: null };
       this.markers = {};
@@ -593,7 +594,7 @@
       if (humanAim) Object.assign(opts, humanAim);
       const rs = (this.state === 'dead' || this.state === 'penalty') ? this.restart : null;
       const style = opts.style || 'over';
-      const from = p.ballHoldPos(new THREE.Vector3());
+      const from = style === 'over' ? p.launchPos(new THREE.Vector3()) : p.ballHoldPos(new THREE.Vector3());
       if (style === 'over') from.y = Math.max(from.y, 0.8);
       else from.y = Math.max(from.y, style === 'flick' ? 0.15 : 0.45);
       const dist = AI.goalDist(team, p.x, p.z);
@@ -685,7 +686,7 @@
       p.pumpN = (p.pumpN || 0) + 1;
       // Кач надо разнообразить (иначе вратарь читает): первый — всем телом, дальше чередуются большие и маленькие наверху
       const small = p.pumpN > 1 && Math.random() < 0.5;
-      p.action = { type: 'fake', t: 0, dur: small ? 0.3 : 0.44, small };
+      p.action = { type: 'fake', t: 0, dur: small ? WP.PUMPD.small : WP.PUMPD.big, small };
       p.holdMode = 'hold';
       p.lastFakeT = this.t;
       // Ноги устают: после третьего кача игрок проседает
@@ -717,34 +718,43 @@
       for (const o of p.team.opp.players) if (o.active && !o.isGK && Math.hypot(o.x - p.x, o.z - p.z) < 2 && Math.random() < 0.5) this.doBlock(o);
     }
 
-    // Атакующий «зарабатывает» обычный фол: упирается в защитника и поднимает мяч, показывая судье захват
+    // Заработать обычный фол как в жизни: игрок кладёт мяч на воду перед собой (мяч не в руке — защитнику мешать уже нельзя),
+    // упирается корпусом и предплечьем в защитника, тот цепляется рукой — судья свистит в момент контакта (resolveDrawFoul)
     drawFoul(p, id) {
       if ((p.drawCD || 0) > this.t) return;
       p.drawCD = this.t + 1.2;
-      p.action = { type: 'drawfoul', t: 0, dur: 0.45 };
-      p.holdMode = 'hold';
       let d = null, dd = 9;
       for (const o of p.team.opp.players) { if (!o.active || o.isGK) continue; const x = Math.hypot(o.x - p.x, o.z - p.z); if (x < dd) { dd = x; d = o; } }
+      p.action = { type: 'drawfoul', t: 0, dur: 0.8, d: dd < 1.4 ? d : null, done: false };
+      p.holdMode = 'hold';
+      if (d && dd < 1.3 && !d.hands) { d.grabT = 0.65; d.grabOf = p; } // защитник тянется рукой к плечу
+    }
+
+    resolveDrawFoul(p, a) {
+      const d = a.d, dd = d ? Math.hypot(d.x - p.x, d.z - p.z) : 9;
       const msg = (m) => this.emit('passinfo', { msg: m });
-      if (!d || dd > 1.15) { msg('Рядом нет защитника — фол не заработать'); return; }
+      if (!d || !d.active || dd > 1.2) { msg('Рядом нет защитника — фол не заработать'); return; }
       const at = p.team;
       if (d.hands) {
-        if (Math.random() < 0.3) { this.turnover(d.team, { x: p.x, z: p.z }, 'ФОЛ В НАПАДЕНИИ', 'Защитник держал руки на виду — судья увидел симуляцию'); return; }
+        if (Math.random() < 0.3) { p.action = null; this.turnover(d.team, { x: p.x, z: p.z }, 'ФОЛ В НАПАДЕНИИ', 'Защитник держал руки на виду — судья увидел симуляцию'); return; }
         msg('Защитник держит руки вверх — судья не свистит'); return;
       }
       const gvx = at.dir * R.HALF_L - p.x, gvz = -p.z, gl = Math.hypot(gvx, gvz) || 1;
       const behind = ((d.x - p.x) * gvx + (d.z - p.z) * gvz) / (gl * dd) < -0.3;
+      const wrestle = !!(p.wrestle && p.wrestle.p === d);
       const lineD = AI.lineD(at, p.x);
-      let pF = clamp(0.5 + (p.attrs.str - d.attrs.str) / 250 + (1.15 - dd) * 0.3 + (d.ctrl ? -0.08 : 0), 0.2, 0.8);
+      // Контакт решает: ближе, сзади (держит), в борьбе у ворот, сильнее соперника — свисток вероятнее
+      const pF = clamp(0.38 + (p.attrs.str - d.attrs.str) / 250 + (1.2 - dd) * 0.35 + (behind ? 0.14 : 0) + (wrestle ? 0.1 : 0) + (d.ctrl ? -0.08 : 0), 0.15, 0.85);
       const r = Math.random();
       if (r < pF) {
+        p.action = null;
         // Захват сзади в зоне 6 м — уже удаление
         if (behind && lineD < R.LINE_6 && Math.random() < 0.3) { this.callExclusion(d, p, { x: p.x, z: p.z }, 'захват сзади'); return; }
         this.say(p.name + ' зарабатывает фол.', 'info');
         this.callFoul(at, { x: p.x, z: p.z }, p, 'ОБЫЧНЫЙ ФОЛ');
         return;
       }
-      if (r < pF + 0.1) { this.turnover(d.team, { x: p.x, z: p.z }, 'ФОЛ В НАПАДЕНИИ', p.name + ' оттолкнулся от защитника'); return; }
+      if (r < pF + 0.08) { p.action = null; this.turnover(d.team, { x: p.x, z: p.z }, 'ФОЛ В НАПАДЕНИИ', p.name + ' оттолкнулся от защитника'); return; }
       msg('Судья не увидел фола — играем');
     }
 
@@ -1087,7 +1097,11 @@
         const receiving = ball.state === 'free' && ball.flight && ball.flight.type === 'pass' && ball.flight.to === p && inp.mag < 0.5;
         p.input.x = inp.x; p.input.z = inp.z; p.input.sprint = inp.sprint;
         // С мячом и без стика: у ворот разворачивается к воротам, дальше — держит направление
-        if (p.hasBall && inp.mag < 0.12) p.faceTo = AI.goalDist(team, p.x, p.z) < 12 ? { x: team.dir * R.HALF_L, z: 0 } : null;
+        // С мячом и без стика игрок стоит как стоял (не крутится сам); к воротам поворачивается только на замахе и каче у ворот
+        if (p.hasBall && inp.mag < 0.12) {
+          const aim = p.action && (p.action.type === 'windup' || p.action.type === 'fake') && AI.goalDist(team, p.x, p.z) < 12;
+          p.faceTo = aim ? { x: team.dir * R.HALF_L, z: 0 } : null;
+        }
         // Без нажатий защитник сам держит позицию (помощник), как только тронул стик — управляешь ты
         // Помощник в защите можно выключить в «Настройке управления» — тогда без нажатий игрок стоит на месте
         const idle = (inp.assist !== undefined ? inp.assist : WP.Input.opts.assist) && !p.hasBall && inp.mag < 0.12 && !(p.action && p.action.type === 'steal');
@@ -1137,6 +1151,9 @@
               }
             }
           }
+          // Из возврата кача можно сразу бросать или качать снова — как в жизни, бросок идёт прямо из кача
+          const pa = p.action;
+          if (canAct && pa && ((pa.type === 'fake' && pa.t > pa.dur * 0.55) || (pa.type === 'drawfoul' && pa.done)) && (inp.shootP || buffered || inp.skipP || inp.lob || inp.fake)) p.action = null;
           if (canAct && !p.action) {
             if (inp.pass && !(rs && rs.type === 'penalty')) this.passCharge[id] = { t: this.t };
             if (fresh) { /* ждём */ }
@@ -1379,6 +1396,7 @@
         else if (!a.ai && a.t > 1.6) this.releaseShot(p, a, { type: a.opts.type, power: 1, zAim: this.humanAim(p, this.inputs[p.ctrl]), yAim: 0.7 });
         return;
       }
+      if (a.type === 'drawfoul' && !a.done && a.t >= 0.32) { a.done = true; this.resolveDrawFoul(p, a); if (p.action !== a) return; }
       if (a.t >= a.dur) { if (a.type === 'release' || a.type === 'pass') p.liftTarget = 0.1; p.action = null; }
     }
 

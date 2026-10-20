@@ -16,7 +16,7 @@ WP.Tutorial = (function () {
       : 'Нажми ' + key('thru', 'Разрез') + ' — мяч сразу уйдёт в свободную воду перед партнёром на ходу к воротам. Или держи ' + key('thru', 'Разрез') + ': кольцо на воде покажет, куда упадёт мяч (зелёное — партнёр успеет первым), ' + WP.Input.moveKbd() + ' выбирает партнёра, отпусти — пас. ' + key('sprint', 'Рывок') + ' в прицеле — верхом.', need: 1 },
     { id: 'shot', side: 'att', open: true, dist: 6.5, title: 'Бросок', text: () => 'Держи ' + key('shoot', 'Бросок') + ' — игрок замахивается, шкала показывает силу; отпусти. Стик вбок выбирает угол ворот. Сделай 2 броска или забей.', need: 2 },
     { id: 'pump', side: 'att', open: true, dist: 6.5, title: 'Кач', text: () => 'Нажми ' + key('fake', 'Кач') + ' — ложный замах всем корпусом. Если вратарь не прыгнул, качни ещё раз, но с паузой: ритмичный кач он читает. Прыгнул — сразу ' + key('shoot', 'Бросок') + ', мяч пойдёт в верхний угол.', need: 1 },
-    { id: 'foul', side: 'att', guard: true, dist: 7, title: 'Заработать фол', text: () => 'Защитник вплотную. Нажми ' + key('foul', 'Фол') + ' — упрись в него и покажи судье захват. Получится не всегда: пробуй ещё.', need: 1 },
+    { id: 'foul', side: 'att', guard: true, dist: 7, title: 'Заработать фол', text: () => 'Защитник вплотную. Нажми ' + key('foul', 'Фол') + ' — игрок положит мяч на воду и упрётся в него: защитник схватит — судья свистнет. Получится не всегда: пробуй ещё.', need: 1 },
     { id: 'screen', side: 'att', dist: 7, title: 'Заслон', text: () => 'Нажми ' + key('play', 'Заслон') + ': партнёр встанет корпусом у защитника другого партнёра. Когда тот откроется («Заслон стоит»), отдай ему пас ' + key('pass', 'Пас') + '.', need: 1 },
     { id: 'steal', side: 'def', title: 'Отбор', text: () => 'Соперник держит мяч. Подплыви вплотную и жми ' + key('shoot', 'Отбор') + '. Надёжнее комбо ' + key('lob', 'Блок') + ' → ' + key('shoot', 'Отбор') + ' → ' + key('shoot', 'Отбор') + ' в ритме: чистый вынос без фола.', need: 1 },
     { id: 'hands', side: 'def', title: 'Руки вверх', text: () => 'Держи ' + key('foul', 'Руки') + ' 2 секунды: обе руки вверх — ты не держишь соперника, судья не даст фол. Но и отобрать мяч так нельзя.', need: 2 },
@@ -94,7 +94,7 @@ WP.Tutorial = (function () {
     wrap('doPass', (a, r, c) => { if (c) ev('pass', { to: a[1], power: (a[2] && a[2].power) || 0, through: !!(a[2] && a[2].through) }); });
     wrap('releaseShot', (a, r, c) => { if (c) ev('shot'); });
     wrap('doFake', (a, r, c) => { if (c && A.gk && A.gk.lastBiteT === m.t) ev('bite'); });
-    wrap('drawFoul', () => { if (m.state !== 'live' && m.restart && m.restart.team === H) ev('foul'); });
+    wrap('resolveDrawFoul', () => { if (m.state !== 'live' && m.restart && m.restart.team === H) ev('foul'); });
     wrap('catchBall', (a) => { if (a[0].team === H && (a[1] === 'steal' || a[1] === 'intercept') && STEPS[idx].side === 'def') ev('steal'); });
     const em = m.emit;
     m.emit = (k, d) => { em(k, d); if (k === 'goal' && d && d.team === H) ev('goal'); };

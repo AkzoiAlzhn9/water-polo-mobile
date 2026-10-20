@@ -196,7 +196,7 @@
   function bodyData() {
     if (BODY) return BODY;
     const D = WP.BODY;
-    BODY = { pos: dec(D.pos, Float32Array), nrm: dec(D.nrm, Int8Array), uv: dec(D.uv, Float32Array), idx: dec(D.idx, Uint16Array), ji: dec(D.ji, Uint8Array), jw: dec(D.jw, Uint8Array), normalMap: tex(D.normalMap), aoMap: tex(D.aoMap) };
+    BODY = { pos: dec(D.pos, Float32Array), nrm: dec(D.nrm, Int8Array), uv: dec(D.uv, Float32Array), idx: dec(D.idx, D.idx32 ? Uint32Array : Uint16Array), ji: dec(D.ji, Uint8Array), jw: dec(D.jw, Uint8Array), normalMap: tex(D.normalMap), aoMap: tex(D.aoMap) };
     return BODY;
   }
   // Голова из Blender: кожа лица с картами, глаза (белок и радужка), брови, борода, шапочка по форме головы
@@ -223,11 +223,12 @@
     if (BGC[key]) return BGC[key];
     const B = bodyData(), D = WP.BODY, n = D.count, P = B.pos, out = new Float32Array(P.length);
     const k = bw - 1, ca = Math.cos(D.bind.arm), sa = Math.sin(D.bind.arm), cl = Math.cos(D.bind.leg), sl = Math.sin(D.bind.leg);
-    // Для каждой кости: [вид, сторона]; вид 0 — торс, 1 — шея/голова, 2 — рука/нога (ось), 3 — кисть/стопа (сдвиг)
+    // Для каждой кости: [вид, сторона]; вид 0 — торс, 1 — шея/голова (шире на K[2]), 2 — рука/нога (ось), 3 — кисть/стопа (сдвиг)
+    // У модели v2 голова — часть кожи: её не раздуваем, полнеет только шея
     const kinds = D.bones.map(name => {
       const s = name.endsWith('L') ? -1 : 1;
       if (name === 'body') return [0, 0];
-      if (name === 'neck' || name === 'head') return [1, 0];
+      if (name === 'neck' || name === 'head') return [1, 0, name === 'head' && D.v === 2 ? 0 : 0.3];
       if (/^(sh|el)/.test(name)) return [2, s, 0, -0.02, s * 0.22, 0, -ca, s * sa, s * 0.22 * k];
       if (/^(hip|kn)/.test(name)) return [2, s, 0, -0.6, s * 0.09, 0, -cl, s * sl, s * 0.09 * k];
       return [3, s, 0, 0, 0, 0, 0, 0, s * (name.startsWith('hand') ? 0.22 : 0.09) * k];
@@ -236,7 +237,7 @@
     const tf = (K, x, y, z) => {
       switch (K[0]) {
         case 0: T[0] = x * (1 + 0.5 * k); T[1] = y; T[2] = z * bw; return;
-        case 1: T[0] = x * (1 + 0.3 * k); T[1] = y; T[2] = z * (1 + 0.3 * k); return;
+        case 1: T[0] = x * (1 + K[2] * k); T[1] = y; T[2] = z * (1 + K[2] * k); return;
         case 2: {
           const rx = x - K[2], ry = y - K[3], rz = z - K[4], a = rx * K[5] + ry * K[6] + rz * K[7];
           const ax = K[5] * a, ay = K[6] * a, az = K[7] * a;
@@ -315,6 +316,8 @@
     map.wrapS = THREE.RepeatWrapping;
     return (MC[k] = WP.underwaterify(new THREE.MeshPhysicalMaterial({ map, roughness: 0.38, clearcoat: 0.45, clearcoatRoughness: 0.25 })));
   }
+  let HID = null;
+  const HIDDEN = () => HID || (HID = new THREE.MeshBasicMaterial({ visible: false }));
   function plainMat(hex, rough) {
     const k = 'p' + hex + rough;
     return MC[k] || (MC[k] = new THREE.MeshStandardMaterial({ color: hex, roughness: rough }));
@@ -351,26 +354,59 @@
     });
   }
 
-  // Кач как в трейлере Water Polo Revolution: мяч высоко над головой на почти прямой руке → чуть назад →
-  // рука выстреливает вперёд-вверх, как на бросок, и замирает перед самым выпуском → возврат наверх
+  // Кач — начало настоящего броска без выпуска (разборы Waterpolo University «How to Fake», Shaquatics, KAP7/Wolf Wigo,
+  // Tony Azevedo и замедленная съёмка броска): из изготовки мяч уходит в тот же замах, что и на бросок (PUMP.shot), корпус
+  // заворачивается, свободная рука тянется к воротам; затем выброс до точки выпуска (PUMP.fwd) — бросковое плечо вперёд,
+  // свободное назад, ноги делают ножничный толчок; резкая остановка с отдачей в кисть и возврат на изготовку.
+  // Уровень в воде почти не меняется — ноги держат высоту. Маленький («мягкий») кач — только плечо и предплечье.
+  // Разворот корпуса yaw > 0 выносит правое (бросковое) плечо вперёд: на замахе оно уходит назад (yaw < 0), на выбросе — вперёд
   const PUMP = {
-    ready: { rs: 3.0, ra: 0.3, re: 0.35, yaw: 0.3, pitch: -0.08 },
-    cock: { rs: 3.4, ra: 0.3, re: 0.55, yaw: 0.5, pitch: -0.14 },
-    fwd: { rs: 2.2, ra: 0.15, re: 0.12, yaw: -0.45, pitch: 0.28 },
-    shot: { rs: 3.45, ra: 0.3, re: 0.62, yaw: 0.6, pitch: -0.15 }, // замах на бросок: чуть глубже, чем в каче
-    // Маленький кач наверху: рука почти не уходит назад, короткий кивок предплечьем вперёд
-    scock: { rs: 3.12, ra: 0.3, re: 0.45, yaw: 0.4, pitch: -0.1 },
-    sfwd: { rs: 2.72, ra: 0.24, re: 0.15, yaw: 0.05, pitch: 0.06 },
+    ready: { rs: 3.0, ra: 0.3, re: 0.35, yaw: -0.2, pitch: -0.08 },
+    fwd: { rs: 2.68, ra: 0.2, re: 0.1, yaw: 0.32, pitch: 0.22 },      // точка выпуска: рука вперёд-вверх ~50° над водой
+    shot: { rs: 3.45, ra: 0.3, re: 0.62, yaw: -0.55, pitch: -0.15 },  // замах на бросок — тот же, что в большом каче
+    scock: { rs: 3.12, ra: 0.3, re: 0.45, yaw: -0.36, pitch: -0.1 },
+    sfwd: { rs: 2.78, ra: 0.26, re: 0.16, yaw: 0.04, pitch: 0.09 },
   };
   const eio = (u) => u * u * (3 - 2 * u), eout = (u) => 1 - (1 - u) * (1 - u) * (1 - u);
-  // Фазы кача; small — маленький кач наверху. drive — насколько сейчас работают ноги и корпус (0…1, пик на выбросе)
+  const PK = Object.keys(PUMP.ready);
+  // Фазы: замах (load) → выброс (strike) → остановка с отдачей (hold) → возврат. Для большого и маленького кача — свои доли
+  const PT = { big: [0.26, 0.4, 0.55], small: [0.28, 0.52, 0.64] };
+  const PUMPD = { big: 0.6, small: 0.32 };
+  // Поза в момент k (0…1): pose — плечо/локоть/корпус, off — свободная рука (1 — к воротам, −1 — прижата назад),
+  // gather/kick — ноги подбираются и бьют ножницами, nod — голова чуть вперёд, f — насколько мяч вынесен вперёд
+  const PP = { pose: {}, roll: 0, off: 0, gather: 0, kick: 0, nod: 0, f: 0 };
   function pumpPhase(k, small) {
-    const C = small ? PUMP.scock : PUMP.cock, F = small ? PUMP.sfwd : PUMP.fwd, sc = small ? 0.5 : 1;
-    const drive = Math.sin(Math.PI * Math.max(0, Math.min(1, (k - 0.12) / 0.5)));
-    if (k < 0.18) return { a: PUMP.ready, b: C, u: eio(k / 0.18), f: -0.4 * sc * eio(k / 0.18), drive };
-    if (k < 0.42) { const u = eout((k - 0.18) / 0.24); return { a: C, b: F, u, f: (-0.4 + 1.4 * u) * sc, drive }; }
-    if (k < 0.56) return { a: F, b: F, u: 0, f: sc, drive };
-    const u = eio((k - 0.56) / 0.44); return { a: F, b: PUMP.ready, u, f: (1 - u) * sc, drive };
+    const [L, S, H] = small ? PT.small : PT.big, C = small ? PUMP.scock : PUMP.shot, F = small ? PUMP.sfwd : PUMP.fwd, R = PUMP.ready;
+    const amp = small ? 0.45 : 1, o = PP.pose;
+    let A, B, u, roll, off, gather = 0, kick = 0, rec = 0;
+    if (k < L) { u = eio(k / L); A = R; B = C; roll = -0.12 * u; off = u; gather = u; }
+    else if (k < S) { const w = (k - L) / (S - L); u = eout(w); A = C; B = F; roll = -0.12 + 0.24 * u; off = 1 - 2 * u; gather = 1 - u; kick = Math.sin(Math.PI * Math.min(1, w * 1.2)); }
+    else if (k < H) { const w = (k - S) / (H - S); u = 1; A = F; B = F; roll = 0.12; off = -1; rec = Math.sin(Math.PI * w) * (1 - w); kick = 0.3 * (1 - w); }
+    else { u = eio((k - H) / (1 - H)); A = F; B = R; roll = 0.12 * (1 - u); off = -(1 - u); }
+    for (const key of PK) o[key] = A[key] + (B[key] - A[key]) * u;
+    // Отдача: мяч не улетел — рука упруго «отскакивает» назад, кисть держит мяч
+    o.rs += 0.12 * rec; o.re += 0.1 * rec;
+    PP.roll = roll * amp; PP.off = off * amp; PP.gather = gather * amp; PP.kick = kick * amp;
+    PP.nod = (small ? 0.06 : 0.14) * (k < L ? 0 : k < H ? Math.sin(Math.PI * Math.min(1, (k - L) / (H - L))) : 0);
+    PP.f = k < S ? (k < L ? -0.4 * u : -0.4 + 1.4 * u) * (small ? 0.5 : 1) : k < H ? (small ? 0.5 : 1) : (1 - u) * (small ? 0.5 : 1);
+    return PP;
+  }
+  WP.PUMPD = PUMPD;
+  // Заработать фол: насколько мяч опущен на воду (0 — на изготовке, 1 — на воде); done — судья не свистнул, мяч поднимается
+  const drawU = (a) => a.t < 0.3 ? eio(a.t / 0.3) : a.done && a.t > 0.55 ? 1 - eio(Math.min(1, (a.t - 0.55) / 0.25)) : 1;
+
+  // Где мяч в ладони (в осях игрока: вперёд, вбок × телосложение, вверх над bodyY; всё × рост) — снято с рендера при lift = 1
+  // (test/pump.js tableOf) для большого и маленького кача и замаха броска сверху; логика не зависит от рендера
+  const BALL_PATH = {
+    big: [[-0.057, 0.262, 0.62], [-0.053, 0.256, 0.625], [-0.041, 0.247, 0.623], [-0.021, 0.251, 0.627], [-0.009, 0.285, 0.622], [-0.035, 0.343, 0.617], [-0.107, 0.398, 0.606], [-0.203, 0.428, 0.592], [-0.292, 0.434, 0.579], [-0.358, 0.427, 0.579], [-0.391, 0.42, 0.592], [0.023, 0.371, 0.587], [0.059, 0.299, 0.581], [0.265, 0.412, 0.555], [0.412, 0.412, 0.527], [0.466, 0.402, 0.489], [0.473, 0.4, 0.48], [0.426, 0.395, 0.472], [0.407, 0.392, 0.481], [0.416, 0.393, 0.477], [0.441, 0.397, 0.472], [0.464, 0.399, 0.461], [0.473, 0.4, 0.455], [0.467, 0.402, 0.457], [0.448, 0.408, 0.461], [0.419, 0.415, 0.479], [0.38, 0.423, 0.49], [0.333, 0.429, 0.514], [0.28, 0.43, 0.526], [0.224, 0.426, 0.552], [0.168, 0.416, 0.562], [0.114, 0.4, 0.583], [0.066, 0.379, 0.59], [0.027, 0.355, 0.604], [-0.003, 0.331, 0.608], [-0.025, 0.309, 0.615], [-0.039, 0.291, 0.617], [-0.048, 0.277, 0.619], [-0.053, 0.268, 0.623], [-0.056, 0.263, 0.624], [-0.057, 0.262, 0.62]],
+    small: [[-0.057, 0.262, 0.62], [-0.053, 0.252, 0.626], [-0.039, 0.238, 0.627], [-0.023, 0.239, 0.631], [-0.015, 0.25, 0.629], [-0.034, 0.25, 0.617], [0.05, 0.385, 0.605], [0.139, 0.435, 0.593], [0.162, 0.444, 0.583], [0.116, 0.396, 0.569], [0.158, 0.44, 0.577], [0.144, 0.438, 0.58], [0.08, 0.41, 0.592], [0.008, 0.361, 0.597], [-0.038, 0.308, 0.615], [-0.055, 0.272, 0.617], [-0.057, 0.262, 0.62]],
+    windup: [[-0.057, 0.262, 0.62], [-0.056, 0.26, 0.623], [-0.053, 0.256, 0.62], [-0.048, 0.251, 0.627], [-0.039, 0.247, 0.621], [-0.029, 0.247, 0.627], [-0.018, 0.254, 0.621], [-0.01, 0.269, 0.625], [-0.01, 0.293, 0.619], [-0.022, 0.323, 0.618], [-0.046, 0.356, 0.612], [-0.083, 0.385, 0.605], [-0.129, 0.408, 0.6], [-0.179, 0.424, 0.588], [-0.229, 0.432, 0.582], [-0.276, 0.434, 0.567], [-0.316, 0.432, 0.564], [-0.349, 0.428, 0.549], [-0.374, 0.424, 0.549], [-0.389, 0.42, 0.542], [-0.394, 0.419, 0.545]],
+  };
+  const QP = [0, 0, 0];
+  function pathAt(tab, k) {
+    const n = tab.length - 1, x = Math.min(n, Math.max(0, k * n)), i = Math.min(n - 1, Math.floor(x)), u = x - i, a = tab[i], b = tab[i + 1];
+    for (let q = 0; q < 3; q++) QP[q] = a[q] + (b[q] - a[q]) * u;
+    return QP;
   }
 
   function angNorm(a) { while (a > Math.PI) a -= TAU; while (a < -Math.PI) a += TAU; return a; }
@@ -433,6 +469,7 @@
       const body = new THREE.Group(); body.scale.setScalar(this.h); root.add(body);
       // Тело из Blender — одна кожа на костях рига; без него — прежние вылепленные части
       const sk = !!WP.BODY;
+      const v2 = sk && WP.BODY.v === 2; // v2: реалистичное тело (Human Base Meshes) — голова, лицо, шапочка и глаза в одной коже
       const bw = this.bw;
       if (!sk) {
         add(body, G.torso, mSkin);
@@ -443,10 +480,16 @@
       const neck = new THREE.Group(); neck.position.y = 0.09; body.add(neck);
       if (!sk) add(neck, s.neck, mSkin, 0, 0.03, 0);
       const headG = new THREE.Group(); headG.position.y = 0.14; headG.scale.setScalar(0.93); neck.add(headG); // голова чуть меньше — плечи кажутся мощнее
+      if (v2) { const R = WP.BODY.rig; neck.position.set(R.neck[0], R.neck[1], 0); headG.position.set(R.head[0], R.head[1], 0); headG.scale.setScalar(1); }
       // Борода или щетина — у части игроков
       const hb = WP.hash(this.name + 'beard');
       const mBeard = plainMat(new THREE.Color(skin).lerp(new THREE.Color(HAIR[Math.floor(hb * 10) % HAIR.length]), hb < 0.2 ? 0.8 : 0.5).getHex(), 0.95);
-      if (sk && WP.BODY.head) {
+      let mBodyParts = null;
+      if (v2) {
+        // Шапочка, борода, брови и глаза — группы той же кожи; без бороды её группа просто не рисуется
+        mCap.map.wrapS = THREE.RepeatWrapping;
+        mBodyParts = [mCap, hb < 0.4 ? mBeard : HIDDEN(), mBrow, plainMat(0xe4ddd2, 0.2), plainMat(0x2a1c14, 0.15)];
+      } else if (sk && WP.BODY.head) {
         const HM = headModel();
         add(headG, HM.skin, skinHeadMat(skin));
         if (hb < 0.4) add(headG, HM.beard, mBeard);
@@ -465,12 +508,25 @@
         }
         add(headG, HG.cap, mCap);
       }
-      for (const zs of [-1, 1]) {
-        const e = add(headG, s.ear, mEar, -0.012, -0.012, zs * 0.094, 1.05, 1.0, 1.25);
-        e.rotation.x = zs > 0 ? 0 : Math.PI;
+      if (v2) {
+        // Наушники — на ушах модели, ремешок — от наушника к наушнику под подбородком
+        const D = WP.BODY, E = D.ear;
+        for (const zs of [-1, 1]) {
+          const e = add(headG, s.ear, mEar, E[0] - 0.004, E[1] - 0.004, zs * (E[2] - 0.012), 0.95, 1.05, 1.0);
+          e.rotation.x = zs > 0 ? 0 : Math.PI;
+        }
+        const tx = D.chin[1] - 0.055 - E[0], ty = D.jaw_y + 0.004 - E[1], len = Math.hypot(tx, ty), r = E[2] - 0.01;
+        const sg = new THREE.Group(); sg.position.set(E[0], E[1], 0); sg.rotation.z = Math.atan2(tx, -ty); headG.add(sg);
+        const strap = add(sg, s.strap, mStrap, 0, 0, 0, r / 0.078, -len / 0.078, r / 0.078);
+        strap.rotation.y = Math.PI / 2;
+      } else {
+        for (const zs of [-1, 1]) {
+          const e = add(headG, s.ear, mEar, -0.012, -0.012, zs * 0.094, 1.05, 1.0, 1.25);
+          e.rotation.x = zs > 0 ? 0 : Math.PI;
+        }
+        const strap = add(headG, s.strap, mStrap, 0.02, -0.04, 0);
+        strap.rotation.set(0, Math.PI / 2, Math.PI);
       }
-      const strap = add(headG, s.strap, mStrap, 0.02, -0.04, 0);
-      strap.rotation.set(0, Math.PI / 2, Math.PI);
       const mkArm = (side) => {
         const sh = new THREE.Group(); sh.position.set(0, -0.02, side * 0.22 * bw); body.add(sh);
         const el = new THREE.Group(); el.position.y = -0.3; sh.add(el);
@@ -500,7 +556,7 @@
       };
       const aR = mkArm(1), aL = mkArm(-1), lR = mkLeg(1), lL = mkLeg(-1);
       this.rig = { root, body, neck, headG, aR, aL, lR, lL };
-      if (sk) this.skinBody(skinBodyMat(skin), mSuit);
+      if (sk) this.skinBody(skinBodyMat(skin), mSuit, mBodyParts);
       this.world.scene.add(root);
       this.j = {
         y: 0.05, pitch: 0.2, roll: 0, yaw: 0,
@@ -511,14 +567,14 @@
 
     // Кожа из Blender на узлах рига: риг ставится в позу привязки (руки и ноги разведены, суставы прямые),
     // запоминаются обратные матрицы — дальше кожа просто следует за узлами при любой анимации
-    skinBody(mSkin, mSuit) {
+    skinBody(mSkin, mSuit, parts) {
       const r = this.rig, D = WP.BODY;
       const map = { body: r.body, neck: r.neck, head: r.headG, shR: r.aR.sh, elR: r.aR.el, handR: r.aR.hand, shL: r.aL.sh, elL: r.aL.el, handL: r.aL.hand, hipR: r.lR.hip, knR: r.lR.kn, footR: r.lR.foot, hipL: r.lL.hip, knL: r.lL.kn, footL: r.lL.foot };
       r.body.rotation.set(0, 0, 0); r.body.position.y = 0; r.neck.rotation.set(0, 0, 0);
       this.setArm(r.aR, 0, D.bind.arm, 0, 1); this.setArm(r.aL, 0, D.bind.arm, 0, -1);
       this.setLeg(r.lR, 0, D.bind.leg, 0, 1); this.setLeg(r.lL, 0, D.bind.leg, 0, -1);
       r.lR.foot.rotation.z = 0; r.lL.foot.rotation.z = 0;
-      const mesh = new THREE.SkinnedMesh(bodySkinGeo(this.bw), [mSkin, mSuit]);
+      const mesh = new THREE.SkinnedMesh(bodySkinGeo(this.bw), [mSkin, mSuit].concat(parts || []));
       r.body.add(mesh);
       r.root.updateMatrixWorld(true);
       mesh.bind(new THREE.Skeleton(D.bones.map(n => map[n])), mesh.matrixWorld);
@@ -584,9 +640,11 @@
       if (ft && this.hasBall && Math.hypot(ft.x - this.x, ft.z - this.z) < 1.2) ft = null;
       if (ft && (sp < 0.9 || (this.hasBall && this.holdMode === 'hold'))) wantH = Math.atan2(ft.z - this.z, ft.x - this.x);
       else if (sp > 0.25) wantH = Math.atan2(this.vz, this.vx);
+      // С мячом на месте — не дёргается из-за мелких поправок (мёртвая зона) и разворачивается спокойнее
+      if (wantH !== null && this.hasBall && sp < 0.4 && Math.abs(angNorm(wantH - this.heading)) < 0.14) wantH = null;
       if (wantH !== null) {
         const d = angNorm(wantH - this.heading);
-        const rate = (this.hasBall ? 3.8 : 5.5) * hum * dt;
+        const rate = (this.hasBall ? (sp < 0.4 ? 2.6 : 3.8) : 5.5) * hum * dt;
         this.heading = angNorm(this.heading + Math.max(-rate, Math.min(rate, d)));
       }
       // Выносливость: 50 → обычный расход сил, 90 → на треть медленнее
@@ -601,6 +659,7 @@
       }
       const up = this.liftTarget > this.lift;
       this.lift += (this.liftTarget - this.lift) * Math.min(1, dt * (up ? (this.action && this.action.type === 'windup' ? 11 : 7) : 3));
+      if (this.grabT > 0) this.grabT -= dt;
       if (this.stealCD > 0) this.stealCD -= dt;
       if (this.stunT > 0) this.stunT -= dt;
       if (this.screenT > 0) this.screenT -= dt;
@@ -620,18 +679,32 @@
       }
       // Кисть правой руки считается аналитически, чтобы логика не зависела от рендера
       const by = this.bodyY(), hh = this.h;
-      let f = 0.08, lat = 0.225 * this.bw * hh, y = by + 0.62 * hh;
+      let f = -0.057 * hh, lat = 0.262 * this.bw * hh, y = by + 0.62 * hh; // мяч на ладони в позе изготовки (как в BALL_PATH)
       if (a && a.type === 'windup') {
         const k = Math.min(1, a.t / Math.min(a.dur, 0.45));
         if (style === 'side') { f = 0.0 - 0.15 * k; lat = (0.3 + 0.25 * k) * hh; y = by + (0.42 - 0.08 * k) * hh; }
         else if (style === 'back') { f = -0.1 * k; lat = (0.25 + 0.2 * k) * hh; y = by + 0.45 * hh; }
-        else { const ez = k * k * (3 - 2 * k); f = 0.08 - 0.42 * ez; y = by + (0.62 + 0.02 * ez) * hh; }
+        else { const q = pathAt(BALL_PATH.windup, k); f = q[0] * hh; lat = q[1] * this.bw * hh; y = by + q[2] * hh; }
+      } else if (a && a.type === 'drawfoul') {
+        // Мяч кладётся на воду перед собой (ладонь сверху), после «играем» снова поднимается на изготовку
+        const u = drawU(a), wx = this.x + c * 0.42 * hh, wz = this.z + s * 0.42 * hh;
+        f = (-0.057 + 0.477 * u) * hh; lat = (0.262 - 0.12 * u) * this.bw * hh;
+        y = (by + 0.62 * hh) * (1 - u) + (0.075 + this.world.waveHeight(wx, wz)) * u;
       } else if (a && a.type === 'fake') {
-        const q = pumpPhase(Math.min(1, a.t / a.dur), a.small).f;
-        f = -0.12 + 0.45 * q; lat = (0.215 - 0.05 * Math.max(0, q)) * this.bw * hh; y = by + (0.8 - 0.06 * Math.max(0, q)) * hh;
+        const q = pathAt(a.small ? BALL_PATH.small : BALL_PATH.big, Math.min(1, a.t / a.dur));
+        f = q[0] * hh; lat = q[1] * this.bw * hh; y = by + q[2] * hh;
       }
       out.set(this.x + c * f - s * lat, y, this.z + s * f + c * lat);
       return out;
+    }
+
+    // Точка выпуска броска сверху для физики — как была до точного замаха (на ней настроен баланс бросков и вратарей);
+    // на рисунке мяч в этот кадр уже летит, разница в 20 см не видна
+    launchPos(out) {
+      const a = this.action, c = Math.cos(this.heading), s = Math.sin(this.heading), hh = this.h;
+      const k = a && a.type === 'windup' ? Math.min(1, a.t / Math.min(a.dur, 0.45)) : 1, ez = k * k * (3 - 2 * k);
+      const f = 0.08 - 0.42 * ez, lat = 0.225 * this.bw * hh, y = this.bodyY() + (0.62 + 0.02 * ez) * hh;
+      return out.set(this.x + c * f - s * lat, y, this.z + s * f + c * lat);
     }
 
     setArm(a, sw, ab, el, side) {
@@ -715,7 +788,7 @@
       let fast = false;
       if (act) {
         const k = Math.min(1, act.t / act.dur);
-        const kw = Math.min(1, act.t / 0.45);
+        const kw = Math.min(1, act.t / (act.type === 'windup' ? Math.min(act.dur, 0.45) : 0.45)); // как в ballHoldPos
         switch (act.type) {
           case 'windup':
             if (style === 'side') { // сбоку, от плеча
@@ -742,7 +815,7 @@
               // До выпуска — тот же выброс, что в каче (поэтому кач и похож на бросок), дальше рука проходит вниз и через тело
               const w = eout(Math.min(1, k / 0.4)), f2 = Math.max(0, (k - 0.35) / 0.65), sk = act.kind === 'skip', B = PUMP.shot, F = PUMP.fwd;
               T.rs = B.rs + (F.rs - B.rs) * w - (sk ? 1.5 : 1.1) * f2; T.ra = B.ra + (F.ra - B.ra) * w + 0.3 * f2; T.re = B.re + (F.re - B.re) * w + 0.23 * f2;
-              T.yaw = B.yaw + (F.yaw - B.yaw) * w - 0.3 * f2; T.pitch = B.pitch + (F.pitch - B.pitch) * w + (sk ? 0.42 : 0.17) * f2; T.roll = 0.12 * w;
+              T.yaw = B.yaw + (F.yaw - B.yaw) * w + 0.3 * f2; T.pitch = B.pitch + (F.pitch - B.pitch) * w + (sk ? 0.42 : 0.17) * f2; T.roll = 0.12 * w;
               T.ls = 1.2; T.la = 0.7; T.le = 0.6;
             }
             fast = true;
@@ -756,22 +829,31 @@
             fast = true;
             break;
           }
-          case 'fake': { // кач всем телом (как учат тренеры): ноги выталкивают корпус вверх, корпус и плечо идут вперёд, голова кивает на ворота
-            const ph = pumpPhase(k, act.small), big = act.small ? 0.45 : 1;
-            for (const key in PUMP.ready) T[key] = ph.a[key] + (ph.b[key] - ph.a[key]) * ph.u;
-            T.y += 0.075 * big * ph.drive;                       // толчок ногами — корпус выше из воды
-            T.hrs += 0.3 * big * ph.drive; T.hls += 0.3 * big * ph.drive * 0.8;
-            T.hrk -= 0.5 * big * ph.drive; T.hlk -= 0.45 * big * ph.drive;
-            act.nod = 0.32 * big * ph.drive;                     // кивок головой вперёд на выбросе
-            // Свободная рука гребёт под водой и держит равновесие
-            T.ls = 1.15 + 0.1 * Math.sin(t * 9); T.la = 0.8; T.le = 0.55;
+          case 'fake': { // кач всем телом: замах как на бросок → выброс с разворотом плеч и ножницами ногами → стоп → изготовка
+            const ph = pumpPhase(k, act.small), o = ph.off;
+            Object.assign(T, ph.pose); T.roll = ph.roll;
+            // Свободная рука: на замахе тянется к воротам, на выбросе уходит назад вниз, между — гребёт у поверхности
+            if (o >= 0) { T.ls = 1.15 + 0.7 * o; T.la = 0.8 - 0.35 * o; T.le = 0.55 - 0.4 * o; }
+            else { T.ls = 1.15 + 0.25 * o; T.la = 0.8 - 0.05 * o; T.le = 0.55 - 0.15 * o; }
+            T.ls += 0.06 * Math.sin(t * 9) * (1 - Math.abs(o));
+            // Ноги: подбираются на замахе, на выбросе — ножницы (правое бедро назад, левое вперёд); высота почти та же
+            T.hrs += 0.22 * ph.gather - 0.55 * ph.kick; T.hrk += -0.3 * ph.gather + 0.9 * ph.kick;
+            T.hls += 0.22 * ph.gather + 0.25 * ph.kick; T.hlk += -0.3 * ph.gather + 0.6 * ph.kick;
+            T.y += 0.012 * ph.gather + 0.03 * ph.kick;
+            act.nod = ph.nod;
             fast = true;
             break;
           }
-          case 'drawfoul': // упирается в защитника спиной, мяч поднят над водой — показывает судье захват
-            T.rs = 3.0; T.ra = 0.35; T.re = 0.25; T.ls = 2.4 + 0.3 * Math.sin(k * Math.PI * 2); T.la = 0.9; T.le = 0.5;
-            T.pitch = -0.28; T.roll = 0.1 * Math.sin(k * Math.PI * 3); fast = true;
+          case 'drawfoul': { // мяч на воду перед собой, ладонь сверху; корпус упирается в защитника, свободное предплечье — щит
+            const u = drawU(act);
+            T.rs = 3.0 - 1.85 * u; T.ra = 0.3; T.re = 0.35 + 0.25 * u;
+            T.ls = 1.15 + 0.55 * u; T.la = 0.8 + 0.45 * u; T.le = 0.55 + 0.75 * u;
+            T.pitch = -0.08 - 0.2 * u; T.yaw = -0.2 + 0.3 * u; T.roll = 0.05 * u;
+            T.hrs += 0.2 * u; T.hls += 0.2 * u;                // ноги чаще и шире — держит позицию под нагрузкой
+            if (u > 0.45 && ball) { const cc = Math.cos(this.heading), ss = Math.sin(this.heading); ikR = new THREE.Vector3(ball.pos.x - cc * 0.07 * this.h, ball.pos.y + 0.12 * this.h, ball.pos.z - ss * 0.07 * this.h); }
+            fast = true;
             break;
+          }
           case 'block':
             if (this.isGK) { T.rs = 2.85; T.ra = 0.55; T.re = 0.1; T.ls = 2.85; T.la = 0.55; T.le = 0.1; }
             else { T.rs = 3.05; T.ra = 0.14; T.re = 0.05; }
@@ -795,6 +877,12 @@
       // «Руки»: обе руки вверх, ладони на виду у судьи
       if (this.hands && !this.hasBall && !this.isGK) { T.rs = 3.0; T.ra = 0.28; T.re = 0.08; T.ls = 3.0; T.la = 0.28; T.le = 0.08; T.pitch = 0.05; fast = true; }
       if (this.gkHandActive) gkIK = true;
+      // Защитник цепляет рукой плечо игрока, который зарабатывает фол
+      if (this.grabT > 0 && this.grabOf && !act && !this.hasBall) {
+        const q = this.grabOf;
+        ikR = new THREE.Vector3(q.x + (this.x - q.x) * 0.28, q.bodyY() + 0.04 * q.h, q.z + (this.z - q.z) * 0.28);
+        T.pitch = 0.38; fast = true;
+      }
       // Борьба у ворот: защитник держит центрового за плечо и под водой за плавки, центровой упирается рукой
       if (W && !act && !this.hasBall) {
         const p = W.p;
@@ -810,7 +898,9 @@
       }
 
       if (this.poseOverride) { Object.assign(T, this.poseOverride); fast = true; }
-      const sK = Math.min(1, dt * (fast ? 30 : 14));
+      // Кач и замах сверху идут ровно по позе (без сглаживания) — тогда мяч из логики остаётся в ладони
+      const exact = act && act.t > 0.04 && !this.poseOverride && (act.type === 'fake' || (act.type === 'windup' && (!style || style === 'over' || style === 'power')));
+      const sK = exact ? 1 : Math.min(1, dt * (fast ? 30 : 14));
       for (const key in T) {
         if (j[key] === undefined) continue;
         j[key] += (T[key] - j[key]) * sK;
