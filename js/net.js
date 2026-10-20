@@ -596,6 +596,43 @@ WP.Net = (function () {
 
   // ---------- прямое соединение двух телефонов (WebRTC); сервер Firebase — только для знакомства и про запас ----------
   const ICE = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'] }, { urls: 'stun:stun.cloudflare.com:3478' }];
+  // TURN-ретранслятор (Metered Open Relay, WP.TURN.url в firebase-config.js): если телефоны не видят друг друга напрямую
+  // (мобильный интернет, строгий NAT), связь идёт через ближайший к ним ретранслятор, а не через сервер Firebase в США.
+  // Временные логин и пароль берутся по ключу и живут в кэше час; без ключа или при ошибке — только STUN, как раньше.
+  let turnCache = null;
+  async function iceServers() {
+    // Постоянный логин Metered (панель → Credentials): ретранслятор global.relay.metered.ca на портах 80/443, UDP и TCP, TURNS
+    const C = WP.TURN && WP.TURN.user && WP.TURN.pass ? WP.TURN : null;
+    if (C) return ICE.concat(['turn:global.relay.metered.ca:80', 'turn:global.relay.metered.ca:80?transport=tcp', 'turn:global.relay.metered.ca:443', 'turns:global.relay.metered.ca:443?transport=tcp'].map(urls => ({ urls, username: C.user, credential: C.pass })));
+    const T = WP.TURN && WP.TURN.url;
+    if (!T) return ICE;
+    if (turnCache && Date.now() - turnCache.at < 3600e3) return ICE.concat(turnCache.list);
+    try {
+      const ctl = window.AbortController ? new AbortController() : null;
+      const to = setTimeout(() => ctl && ctl.abort(), 3000);
+      const r = await fetch(T, ctl ? { signal: ctl.signal } : {});
+      clearTimeout(to);
+      const list = (await r.json()).filter(x => x && x.urls && /^turns?:/.test([].concat(x.urls)[0]));
+      if (list.length) turnCache = { at: Date.now(), list };
+    } catch (e) { /* без TURN */ }
+    return turnCache ? ICE.concat(turnCache.list) : ICE;
+  }
+  // Ретранслятор ли сейчас под соединением (для плашки в матче)
+  async function relayCheck(g) {
+    try {
+      if (!g.pc) return;
+      const st = await g.pc.getStats(); let pair = null; const c = {};
+      let selId = null; const pairs = {};
+      st.forEach(r => {
+        if (r.type === 'transport' && r.selectedCandidatePairId) selId = r.selectedCandidatePairId;
+        if (r.type === 'candidate-pair') { pairs[r.id] = r; if (r.selected || (r.nominated && r.state === 'succeeded')) pair = pair || r; }
+        if (r.type === 'local-candidate' || r.type === 'remote-candidate') c[r.id] = r;
+      });
+      if (selId && pairs[selId]) pair = pairs[selId];
+      const l = pair && c[pair.localCandidateId], rm = pair && c[pair.remoteCandidateId];
+      g.relay = !!((l && l.candidateType === 'relay') || (rm && rm.candidateType === 'relay'));
+    } catch (e) { /* статистики нет */ }
+  }
   const rtcOk = () => !!(fb && window.RTCPeerConnection);
   const dcOpen = () => (game && game.dc && game.dc.readyState === 'open' ? game.dc : null);
   const dcAlive = () => !!(dcOpen() && performance.now() - (game.dcAt || 0) < 2000);
@@ -608,7 +645,7 @@ WP.Net = (function () {
   }
   function rtcClose(g) { if (g.pc) { try { g.pc.close(); } catch (e) { /* уже закрыто */ } } g.pc = null; g.dc = null; }
   function rtcWire(g, pc, ch) {
-    ch.onopen = () => { if (g.pc !== pc) return; g.dc = ch; g.rtcTries = 0; g.room.presence({ rtc: null }).catch(() => {}); };
+    ch.onopen = () => { if (g.pc !== pc) return; g.dc = ch; g.rtcTries = 0; g.room.presence({ rtc: null }).catch(() => {}); setTimeout(() => relayCheck(g), 1500); };
     ch.onclose = () => { if (g.dc === ch) g.dc = null; };
     ch.onmessage = (e) => {
       if (game !== g) return;
@@ -630,7 +667,9 @@ WP.Net = (function () {
     if (!rtcOk() || !g || g.role !== 'host') return;
     rtcClose(g);
     g.rtcTries = (g.rtcTries || 0) + 1;
-    const id = (g.rtcId || 0) + 1, pc = new RTCPeerConnection({ iceServers: ICE });
+    const id = (g.rtcId || 0) + 1, ice = await iceServers();
+    if (game !== g || g.pc) return; // пока ждали ключи, уже запустили другое соединение
+    const pc = new RTCPeerConnection({ iceServers: ice });
     g.rtcId = id; g.pc = pc; g.rtcSet = false;
     try {
       rtcWire(g, pc, pc.createDataChannel('g', { ordered: false, maxRetransmits: 0 }));
@@ -642,8 +681,11 @@ WP.Net = (function () {
   async function rtcAnswer(g, r) {
     if (!rtcOk()) return;
     rtcClose(g);
-    const pc = new RTCPeerConnection({ iceServers: ICE });
-    g.rtcId = r.id; g.pc = pc;
+    g.rtcId = r.id;
+    const ice = await iceServers();
+    if (game !== g || g.rtcId !== r.id || g.pc) return;
+    const pc = new RTCPeerConnection({ iceServers: ice });
+    g.pc = pc;
     pc.ondatachannel = (e) => rtcWire(g, pc, e.channel);
     try {
       await pc.setRemoteDescription({ type: 'offer', sdp: r.o });
@@ -655,7 +697,7 @@ WP.Net = (function () {
   // Для плашки в матче: как идёт связь и какая задержка
   function info() {
     if (!game || game.phase !== 'play') return null;
-    return { p2p: !!dcOpen(), rtt: Math.round(game.rtt || 0) };
+    return { p2p: !!dcOpen(), relay: !!(dcOpen() && game.relay), rtt: Math.round(game.rtt || 0) };
   }
   function collectInput(m, inp) {
     CNT.forEach((k, j) => { if (inp[k]) game.cnt[j]++; });
@@ -766,6 +808,7 @@ WP.Net = (function () {
   function start() {
     init().then(() => {
       if (!room || lobbyUnsub) return;
+      if (fb) iceServers(); // ключи TURN — заранее, чтобы матч не ждал их
       room.presence({ v: 1, st: myStatus, team: pref.team, len: pref.len }).catch(() => {});
       lobbyUnsub = room.onPeers(async (ch) => { await resolveNames(ch.peers); onLobby(); });
     });

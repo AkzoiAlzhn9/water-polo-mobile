@@ -753,7 +753,7 @@ WP.UI = (function () {
     $('netPill').hidden = !ns;
     if (ns && $('netPill').textContent !== ns) $('netPill').textContent = ns;
     // Связь в онлайн-матче: напрямую или через сервер и задержка
-    const ni = m.cfg.net ? WP.Net.info() : null, nt = ni ? (ni.p2p ? 'P2P' : 'сервер') + (ni.rtt ? ' · ' + ni.rtt + ' мс' : '') : '';
+    const ni = m.cfg.net ? WP.Net.info() : null, nt = ni ? (ni.relay ? 'TURN' : ni.p2p ? 'P2P' : 'сервер') + (ni.rtt ? ' · ' + ni.rtt + ' мс' : '') : '';
     $('netPing').hidden = !nt;
     if (nt && $('netPing').textContent !== nt) { $('netPing').textContent = nt; $('netPing').className = ni.rtt > 350 ? 'bad' : ni.rtt > 180 ? 'mid' : ''; }
     $('hint').hidden = !hint;
