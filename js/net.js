@@ -9,7 +9,7 @@ WP.Net = (function () {
   const STATES = ['intro', 'sprint', 'live', 'dead', 'goal', 'break', 'final', 'timeout', 'penalty'];
   const CNT = ['pass', 'shootP', 'lob', 'skipP', 'fake', 'foul', 'play', 'sub', 'thru', 'lobpass', 'timeout', 'challenge', 'drive']; // новые — только в конец: у старой версии у соперника номера не сдвинутся
   const HELD = ['passD', 'shootD', 'skipD', 'foulD', 'thruD', 'fakeD', 'sprintK', 'sprint'];
-  const r2 = (v) => Math.round(v * 100) / 100;
+  const r2 = (v) => Math.round(v * 100) / 100, r1 = (v) => Math.round(v * 10) / 10;
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
@@ -192,15 +192,38 @@ WP.Net = (function () {
   }
   async function logout() { if (fb) { for (const f of accOff) f(); accOff = []; await fb.auth.signOut(); location.reload(); } }
   // Комната: rooms/<имя>/peers/<вкладка> = { by, name, photo, p: присутствие }; узел сам удаляется при обрыве связи
+  const STALE = 90000;
+  let srvOff = 0;
+  const serverNow = () => Date.now() + srvOff;
   function fbRoom() {
     const fdb = fb.db, u = fb.auth.currentUser, self = Math.random().toString(36).slice(2, 12);
+    fdb.ref('.info/serverTimeOffset').on('value', (s) => { srvOff = +s.val() || 0; });
     function api(name) {
       const base = fdb.ref('rooms/' + name + '/peers'), mine = base.child(self);
-      let pres = {}, peersMap = new Map(), snap = null, handlers = [], pend = null, lastW = 0, alive = true;
-      const write = () => { pend = null; lastW = Date.now(); if (alive) mine.set({ by: u.uid, name: (me && me.name) || u.displayName || '', photo: u.photoURL || '', p: pres, t: firebase.database.ServerValue.TIMESTAMP }).catch(() => {}); };
+      let pres = {}, peersMap = new Map(), snap = null, handlers = [], pend = null, lastW = 0, alive = true, inflight = 0, dirty = false, lastVal = null, full = false;
+      const chg = new Set();
+      // Не копим очередь записей: при слабой связи Firebase честно доставлял все старые снимки по очереди, и задержка
+      // росла без конца. Теперь в пути не больше трёх записей, остальные сливаются в одну — уходит самое свежее состояние.
+      const write = () => {
+        pend = null;
+        if (!alive) return;
+        if (inflight >= 3) { dirty = true; return; }
+        inflight++; dirty = false; lastW = Date.now();
+        // Во время матча меняются только снимок (s) и ввод (i) — шлём их отдельно, без имени и ссылки на фото: трафика меньше
+        const only = full && chg.size && [...chg].every(k => k === 's' || k === 'i');
+        let w;
+        if (only) { const up = { t: firebase.database.ServerValue.TIMESTAMP }; for (const k of chg) up['p/' + k] = pres[k] === undefined ? null : pres[k]; w = mine.update(up); }
+        else w = mine.set({ by: u.uid, name: (me && me.name) || u.displayName || '', photo: u.photoURL || '', p: pres, t: firebase.database.ServerValue.TIMESTAMP }).then(() => { full = true; });
+        chg.clear();
+        w.catch(() => { full = false; }).then(() => { inflight--; if (dirty && alive && !pend) pend = setTimeout(write, Math.max(0, 40 - (Date.now() - lastW))); });
+      };
+      // Сердцебиение: метка времени обновляется, пока игра открыта; кто не отмечался 90 с — не в сети (вкладку убили,
+      // телефон заснул — запись в базе могла остаться, раньше из-за этого «в сети» показывало лишних людей)
+      const beat = setInterval(() => { if (alive && Date.now() - lastW > 20000) { chg.add('*'); write(); } }, 5000);
+      const fresh = (v) => !v.t || serverNow() - v.t < STALE;
       // Вернулись в сеть (после WhatsApp и т.п.) — заново занимаем место в комнате
       const conn = fdb.ref('.info/connected');
-      const onConn = conn.on('value', (s) => { if (s.val() === true && alive) { mine.onDisconnect().remove(); write(); } });
+      const onConn = conn.on('value', (s) => { if (s.val() === true && alive) { full = false; chg.add('*'); mine.onDisconnect().remove(); write(); } });
       function build() {
         if (snap) return snap;
         const arr = [{ peer: self, by: u.uid, isMe: true, sameTab: true, kind: 'viewer', guest: false, presence: Object.freeze({ ...pres }), updatedAt: Date.now() }];
@@ -210,9 +233,12 @@ WP.Net = (function () {
       const onVal = base.on('value', (s) => {
         const val = s.val() || {}, prev = peersMap, joined = [], left = [];
         peersMap = new Map();
+        lastVal = val;
         for (const id in val) {
           if (id === self) continue;
-          const v = val[id] || {}, key = JSON.stringify(v.p || {}), old = prev.get(id);
+          const v = val[id] || {};
+          if (!fresh(v)) { if (v.by === u.uid) base.child(id).remove().catch(() => {}); continue; } // свои старые вкладки убираем сами
+          const key = JSON.stringify(v.p || {}), old = prev.get(id);
           if (v.by && v.name) nameCache[v.by] = v.name;
           peersMap.set(id, old && old.key === key ? old : { by: v.by || null, presence: Object.freeze(v.p || {}), key, at: Date.now() });
           if (!old) joined.push(id);
@@ -222,10 +248,12 @@ WP.Net = (function () {
         const peers = build();
         for (const h of handlers.slice()) h({ peers, joined: peers.filter(p => joined.includes(p.peer)), left: left.map(id => ({ peer: id })), updated: [] });
       }, (err) => { msg = 'Нет доступа к комнате: ' + (err && err.message); });
+      // Пересчитываем список раз в 15 с: устаревшие исчезают, даже если в комнате никто ничего не пишет
+      const sweep = setInterval(() => { if (alive && lastVal && [...peersMap.keys()].some(id => !fresh(lastVal[id] || {}))) onVal.call(null, { val: () => lastVal }); }, 15000);
       return {
         name,
         presence(patch) {
-          for (const k in patch) { if (patch[k] === null) delete pres[k]; else pres[k] = patch[k]; }
+          for (const k in patch) { if (patch[k] === null) delete pres[k]; else pres[k] = patch[k]; chg.add(k); }
           snap = null;
           if (Date.now() - lastW > 40) write(); else if (!pend) pend = setTimeout(write, 40);
           return Promise.resolve();
@@ -233,7 +261,7 @@ WP.Net = (function () {
         peers: build,
         onPeers(fn) { handlers.push(fn); setTimeout(() => fn({ peers: build(), joined: build(), left: [], updated: [] }), 0); return () => { handlers = handlers.filter(h => h !== fn); }; },
         connected: () => true,
-        leave() { alive = false; base.off('value', onVal); conn.off('value', onConn); mine.onDisconnect().cancel(); handlers = []; return mine.remove().catch(() => {}); },
+        leave() { alive = false; clearInterval(beat); clearInterval(sweep); base.off('value', onVal); conn.off('value', onConn); mine.onDisconnect().cancel(); handlers = []; return mine.remove().catch(() => {}); },
       };
     }
     const lobby = api('lobby');
@@ -462,7 +490,7 @@ WP.Net = (function () {
         const a = p.action, at = a ? ACT.indexOf(a.type) : -1;
         const sty = a ? STY.indexOf((a.opts && a.opts.style) || a.style || '') : -1;
         const f = (p.hasBall ? 1 : 0) | (p.excluded ? 2 : 0) | (p.hands ? 4 : 0) | (p.gkHandActive ? 8 : 0) | (p.outForGame ? 16 : 0) | (p.hardTime ? 32 : 0);
-        const row = [ti, p.num, r2(p.x), r2(p.z), r2(p.heading), r2(p.lift), r2(p.vx), r2(p.vz), at, at >= 0 ? r2(Math.min(a.t, 9)) : 0, at >= 0 ? r2(Math.min(a.dur, 9)) : 0, sty, f, p.excluded ? Math.ceil(p.exclTimer) : 0];
+        const row = [ti, p.num, r2(p.x), r2(p.z), r2(p.heading), r1(p.lift), r1(p.vx), r1(p.vz), at, at >= 0 ? r2(Math.min(a.t, 9)) : 0, at >= 0 ? r2(Math.min(a.dur, 9)) : 0, sty, f, p.excluded ? Math.ceil(p.exclTimer) : 0]; // скорость и подъём — до 0,1: трафик меньше, на глаз не видно
         if (p.gkHandActive) row.push(r2(p.gkHand.x), r2(p.gkHand.y), r2(p.gkHand.z));
         P.push(row);
       }
@@ -567,7 +595,7 @@ WP.Net = (function () {
   }
 
   // ---------- прямое соединение двух телефонов (WebRTC); сервер Firebase — только для знакомства и про запас ----------
-  const ICE = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }];
+  const ICE = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'] }, { urls: 'stun:stun.cloudflare.com:3478' }];
   const rtcOk = () => !!(fb && window.RTCPeerConnection);
   const dcOpen = () => (game && game.dc && game.dc.readyState === 'open' ? game.dc : null);
   const dcAlive = () => !!(dcOpen() && performance.now() - (game.dcAt || 0) < 2000);
@@ -646,7 +674,8 @@ WP.Net = (function () {
   function applyBuffered(m) {
     const buf = game.buf; if (!buf.length) return;
     // Буфер подстраивается: по прямому соединению ~50 мс, по неровной сети больше (без рывков)
-    game.delay = Math.max(45, Math.min(120, (game.ivl || 40) * 1.3 + (game.jit || 10) * 2.5));
+    // Через сервер снимки приходят реже (запись не встаёт в очередь) — буфер растёт вместе с интервалом, иначе картинка стоит рывками
+    game.delay = Math.max(45, Math.min(260, (game.ivl || 40) * 1.3 + (game.jit || 10) * 2.5));
     const rt = performance.now() - game.delay;
     let a = buf[0], b = buf[buf.length - 1], k = 1;
     for (let i = buf.length - 1; i > 0; i--) { if (buf[i - 1].at <= rt) { a = buf[i - 1]; b = buf[i]; k = Math.max(0, Math.min(1, (rt - a.at) / Math.max(1, b.at - a.at))); break; } }
