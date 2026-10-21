@@ -441,52 +441,63 @@
       }
     }
 
+    // Ворота как на соревнованиях: рама из квадратной белой трубы (стойки уходят под воду), сверху рамка назад,
+    // задняя перекладина и стойки до воды; плавучее основание с красными поплавками; сетка из толстого шнура с крупной
+    // ячейкой (~11 см) провисает. Задняя сетка — на глубине R.GOAL_DEPTH, там же её останавливает физика мяча.
     buildGoal(side) {
       const s = this.scene, g = new THREE.Group();
-      const gx = side * R.HALF_L;
-      const white = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.35 });
-      WP.underwaterify(white, 0.8);
-      const postGeo = new THREE.CylinderGeometry(R.POST_R, R.POST_R, 1.8, 12);
-      for (const zz of [-R.GOAL_HALF_W - R.POST_R, R.GOAL_HALF_W + R.POST_R]) {
-        const p = new THREE.Mesh(postGeo, white); p.position.set(gx, 0, zz); g.add(p);
-      }
-      const bar = new THREE.Mesh(new THREE.CylinderGeometry(R.POST_R, R.POST_R, R.GOAL_HALF_W * 2 + R.POST_R * 4, 12), white);
-      bar.rotation.x = Math.PI / 2; bar.position.set(gx, R.GOAL_H + R.POST_R, 0); g.add(bar);
-      const back = gx + side * R.GOAL_DEPTH;
-      const thin = new THREE.CylinderGeometry(0.02, 0.02, 1, 8);
-      const addBar = (a, b) => {
-        const m = new THREE.Mesh(thin, white);
-        const d = new THREE.Vector3().subVectors(b, a); const len = d.length();
-        m.scale.y = len; m.position.copy(a).addScaledVector(d, 0.5);
-        m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.normalize());
-        g.add(m);
+      const gx = side * R.HALF_L, H = R.GOAL_H + R.POST_R, hw = R.GOAL_HALF_W + R.POST_R, D = R.GOAL_DEPTH + 0.04;
+      const back = gx + side * D;
+      const white = WP.underwaterify(new THREE.MeshStandardMaterial({ color: 0xf4f6f8, roughness: 0.3, metalness: 0.05 }), 0.8);
+      const red = WP.underwaterify(new THREE.MeshStandardMaterial({ color: 0xd5262e, roughness: 0.45 }), 0.8);
+      const bar = (ax, ay, az, bx, by, bz, t, mat) => {
+        const A = new THREE.Vector3(ax, ay, az), B = new THREE.Vector3(bx, by, bz), d = B.clone().sub(A), L = d.length();
+        const m = new THREE.Mesh(new THREE.BoxGeometry(t, L + t, t), mat || white);
+        m.position.copy(A).addScaledVector(d, 0.5); m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.normalize()); g.add(m); return m;
       };
-      const hw = R.GOAL_HALF_W + R.POST_R;
-      addBar(new THREE.Vector3(gx, R.GOAL_H, -hw), new THREE.Vector3(back, R.GOAL_H, -hw));
-      addBar(new THREE.Vector3(gx, R.GOAL_H, hw), new THREE.Vector3(back, R.GOAL_H, hw));
-      addBar(new THREE.Vector3(back, R.GOAL_H, -hw), new THREE.Vector3(back, R.GOAL_H, hw));
-      addBar(new THREE.Vector3(back, -0.6, -hw), new THREE.Vector3(back, R.GOAL_H, -hw));
-      addBar(new THREE.Vector3(back, -0.6, hw), new THREE.Vector3(back, R.GOAL_H, hw));
-      // Поплавки ворот
-      const flo = new THREE.MeshStandardMaterial({ color: 0xf07a1a, roughness: 0.5 });
-      const fl = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.12, hw * 2 + 0.6), flo); fl.position.set(back, 0.0, 0); g.add(fl);
-      for (const zz of [-hw - 0.2, hw + 0.2]) { const f = new THREE.Mesh(new THREE.BoxGeometry(R.GOAL_DEPTH + 0.2, 0.12, 0.18), flo); f.position.set(gx + side * R.GOAL_DEPTH / 2, 0, zz); g.add(f); }
-      // Сетка
-      const netTex = canvasTex(128, 128, (c, w, h) => {
-        c.clearRect(0, 0, w, h); c.strokeStyle = 'rgba(255,255,255,0.9)'; c.lineWidth = 3;
-        for (let i = 0; i <= 8; i++) { c.beginPath(); c.moveTo(i * 16, 0); c.lineTo(i * 16, h); c.stroke(); c.beginPath(); c.moveTo(0, i * 16); c.lineTo(w, i * 16); c.stroke(); }
+      const T = 0.075, t2 = 0.045;
+      // Стойки и перекладина
+      for (const zz of [-hw, hw]) bar(gx, -0.75, zz, gx, H, zz, T);
+      bar(gx, H, -hw, gx, H, hw, T);
+      // Верхняя рамка назад, задняя перекладина, задние стойки до воды
+      const bh = H - 0.04;
+      for (const zz of [-hw, hw]) { bar(gx, H, zz, back, bh, zz, t2); bar(back, bh, zz, back, -0.05, zz, t2); }
+      bar(back, bh, -hw, back, bh, hw, t2);
+      // Плавучее основание: боковые красные поплавки с белыми торцами и задняя балка у самой воды
+      for (const zz of [-hw - 0.11, hw + 0.11]) {
+        const f = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.075, D + 0.32, 14), red);
+        f.rotation.z = Math.PI / 2; f.position.set(gx + side * (D / 2 + 0.02), 0.02, zz); g.add(f);
+        for (const e of [-1, 1]) { const c = new THREE.Mesh(new THREE.CylinderGeometry(0.077, 0.077, 0.05, 14), white); c.rotation.z = Math.PI / 2; c.position.set(gx + side * (D / 2 + 0.02) + e * (D + 0.27) / 2, 0.02, zz); g.add(c); }
+        bar(gx, 0.0, zz * 0.97, gx, 0.0, zz > 0 ? hw : -hw, t2); // крепление поплавка к стойке
+      }
+      bar(back, 0.0, -hw - 0.11, back, 0.0, hw + 0.11, 0.06, red);
+      // Сетка: толстый шнур, прозрачная ячейка; alphaToCoverage — ровные края без сортировки прозрачности
+      if (!this.netTex) this.netTex = canvasTex(64, 64, (c, w, h) => {
+        c.clearRect(0, 0, w, h);
+        c.strokeStyle = 'rgba(250,252,255,1)'; c.lineWidth = 7;
+        c.beginPath(); c.moveTo(0, 0); c.lineTo(w, 0); c.moveTo(0, 0); c.lineTo(0, h); c.stroke();
+        c.fillStyle = 'rgba(250,252,255,1)'; c.beginPath(); c.arc(0, 0, 6, 0, Math.PI * 2); c.fill(); // узел
       });
-      netTex.wrapS = netTex.wrapT = THREE.RepeatWrapping;
-      const mkNet = (rx, ry) => { const t = netTex.clone(); t.needsUpdate = true; t.repeat.set(rx, ry); return new THREE.MeshBasicMaterial({ map: t, transparent: true, opacity: 0.55, side: THREE.DoubleSide, depthWrite: false }); };
-      const backNet = new THREE.Mesh(new THREE.PlaneGeometry(hw * 2, 1.5, 20, 10), mkNet(15, 7));
-      backNet.position.set(back, 0.15, 0); backNet.rotation.y = Math.PI / 2; g.add(backNet);
-      // Сетка прогибается от мяча и колышется (смещения считаются от исходных точек)
-      g.userData.net = { mesh: backNet, base: backNet.geometry.attributes.position.array.slice(), side, hw, t: 9, z: 0, y: 0, amp: 0, rest: true };
-      const topNet = new THREE.Mesh(new THREE.PlaneGeometry(R.GOAL_DEPTH, hw * 2), mkNet(3, 15));
-      topNet.rotation.x = -Math.PI / 2; topNet.position.set(gx + side * R.GOAL_DEPTH / 2, R.GOAL_H, 0); g.add(topNet);
+      const CELL = 0.11;
+      const netMat = (w, h) => {
+        const t = this.netTex.clone(); t.needsUpdate = true; t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(w / CELL, h / CELL); t.anisotropy = 4;
+        return new THREE.MeshStandardMaterial({ map: t, color: 0xeef3f7, roughness: 0.9, side: THREE.DoubleSide, alphaTest: 0.35, alphaToCoverage: true, transparent: false });
+      };
+      // Задняя сетка (качается от мяча — updateNets) с провисом наружу
+      const NH = bh + 0.6;
+      const backNet = new THREE.Mesh(new THREE.PlaneGeometry(hw * 2, NH, 24, 14), netMat(hw * 2, NH));
+      backNet.position.set(back, bh - NH / 2, 0); backNet.rotation.y = Math.PI / 2; g.add(backNet);
+      { const pa = backNet.geometry.attributes.position; for (let i = 0; i < pa.count; i++) { const x = pa.getX(i), y = pa.getY(i), u = 1 - Math.pow(Math.abs(x) / hw, 2), v = Math.max(0, Math.min(1, (NH / 2 - y) / NH)); pa.setZ(i, side * 0.06 * u * Math.sin(Math.PI * Math.min(1, v * 1.3))); } }
+      g.userData.net = { mesh: backNet, base: backNet.geometry.attributes.position.array.slice(), side, hw, t: 9, z: 0, y: 0, amp: 0, rest: true, cy0: backNet.position.y };
+      // Верх: от перекладины к задней перекладине, чуть провисает
+      const top = new THREE.Mesh(new THREE.PlaneGeometry(D, hw * 2, 6, 12), netMat(D, hw * 2));
+      top.rotation.x = -Math.PI / 2; top.position.set(gx + side * D / 2, H - 0.03, 0); g.add(top);
+      { const pa = top.geometry.attributes.position; for (let i = 0; i < pa.count; i++) { const x = pa.getX(i), y = pa.getY(i); pa.setZ(i, -0.05 * (1 - Math.pow(y / hw, 2)) * (1 - Math.pow(2 * x / D, 2))); } top.geometry.computeVertexNormals(); }
+      // Боковые сетки: от стойки до задней стойки, от перекладины до-под воду
       for (const zz of [-hw, hw]) {
-        const sn = new THREE.Mesh(new THREE.PlaneGeometry(R.GOAL_DEPTH, 1.5), mkNet(3, 7));
-        sn.position.set(gx + side * R.GOAL_DEPTH / 2, 0.15, zz); g.add(sn);
+        const sn = new THREE.Mesh(new THREE.PlaneGeometry(D, NH, 6, 10), netMat(D, NH));
+        sn.position.set(gx + side * D / 2, bh - NH / 2, zz); g.add(sn);
+        const pa = sn.geometry.attributes.position; for (let i = 0; i < pa.count; i++) { const x = pa.getX(i), y = pa.getY(i), v = Math.max(0, Math.min(1, (NH / 2 - y) / NH)); pa.setZ(i, Math.sign(zz) * 0.035 * (1 - Math.pow(2 * x / D, 2)) * Math.sin(Math.PI * v)); }
       }
       g.userData.backNet = backNet;
       s.add(g);
@@ -992,12 +1003,12 @@
         const pos = n.mesh.geometry.attributes.position, a = pos.array, b = n.base;
         const k = n.t > 1.8 ? 0 : n.amp * (1 - Math.exp(-28 * n.t)) * Math.exp(-3 * n.t) * Math.cos(11 * n.t);
         // Локальные оси сетки: x = −z мира, y = высота − 0,15, z — наружу из ворот (у ворот side = −1 наоборот)
-        const cx = -n.z, cy = n.y - 0.15;
+        const cx = -n.z, cy = n.y - (n.cy0 !== undefined ? n.cy0 : 0.15);
         for (let i = 0; i < a.length; i += 3) {
           const bx = b[i], by = b[i + 1];
           const pin = (1 - Math.pow(Math.abs(bx) / n.hw, 4)) * Math.max(0, Math.min(1, (0.75 - by) / 0.35));
           const d2 = (bx - cx) * (bx - cx) + (by - cy) * (by - cy);
-          a[i + 2] = n.side * k * pin * Math.exp(-d2 / 0.22);
+          a[i + 2] = b[i + 2] + n.side * k * pin * Math.exp(-d2 / 0.22); // поверх провиса
         }
         pos.needsUpdate = true;
         if (n.t > 1.8) n.rest = true;
