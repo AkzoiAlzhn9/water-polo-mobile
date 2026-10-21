@@ -595,6 +595,8 @@
       const rs = (this.state === 'dead' || this.state === 'penalty') ? this.restart : null;
       const style = opts.style || 'over';
       const from = style === 'over' ? p.launchPos(new THREE.Vector3()) : p.ballHoldPos(new THREE.Vector3());
+      // Колотушка: мяч уходит из руки уже за спиной (иначе пролетал бы сквозь игрока)
+      if (style === 'back') { const c = Math.cos(p.heading), sn = Math.sin(p.heading), hh = p.h; from.set(p.x - c * 0.35 * hh - sn * 0.28 * hh, 0, p.z - sn * 0.35 * hh + c * 0.28 * hh); }
       if (style === 'over') from.y = Math.max(from.y, 0.8);
       else from.y = Math.max(from.y, style === 'flick' ? 0.15 : 0.45);
       const dist = AI.goalDist(team, p.x, p.z);

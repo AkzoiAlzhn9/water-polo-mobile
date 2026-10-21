@@ -751,7 +751,7 @@
       if (a && a.type === 'windup') {
         const k = Math.min(1, a.t / Math.min(a.dur, 0.45));
         if (style === 'side') { f = 0.0 - 0.15 * k; lat = (0.3 + 0.25 * k) * hh; y = by + (0.42 - 0.08 * k) * hh; }
-        else if (style === 'back') { f = -0.1 * k; lat = (0.25 + 0.2 * k) * hh; y = by + 0.45 * hh; }
+        else if (style === 'back') { const ez = k * k * (3 - 2 * k); f = (0.42 + 0.04 * ez) * hh; lat = (0.2 - 0.2 * ez) * this.bw * hh; y = by - (0.18 + 0.04 * ez) * hh; } // у воды перед собой
         else { const q = pathAt(BALL_PATH.windup, k); f = q[0] * hh; lat = q[1] * this.bw * hh; y = by + q[2] * hh; }
       } else if (a && a.type === 'drawfoul') {
         // Мяч кладётся на воду перед собой (ладонь сверху), после «играем» снова поднимается на изготовку
@@ -852,7 +852,13 @@
         const gd = Math.abs(this.team.dir * WP.R.HALF_L - this.x);
         if (!this.isGK && gd < 10) Object.assign(T, PUMP.ready); else { T.rs = 2.75; T.ra = 0.2; T.re = 0.5; }
       }
-      if (this.isGK && !this.hasBall && !act && K < 0.5) { T.rs = 1.85; T.ra = 1.0; T.re = 0.5; T.ls = 1.85; T.la = 1.0; T.le = 0.5; } // руки широко, ладони у воды
+      if (this.isGK && !this.hasBall && !act && K < 0.5) {
+        // Руки широко, ладони у воды; соперник замахнулся (вратарь поднялся) — стойка «наготове»: руки разведены на уровне головы
+        const hi = Math.max(0, Math.min(1, (this.liftTarget - 0.75) / 0.25));
+        T.rs = 1.85 + 0.55 * hi; T.ra = 1.0 + 0.1 * hi; T.re = 0.5 + 0.15 * hi; T.ls = T.rs; T.la = T.ra; T.le = T.re;
+        T.pitch -= 0.06 * hi;
+        T.hrs += 0.15 * hi * Math.sin(ph * 2.4); T.hls += 0.15 * hi * Math.sin(ph * 2.4 + Math.PI); // ноги чаще — держит высоту
+      }
       let fast = false;
       if (act) {
         const k = Math.min(1, act.t / act.dur);
@@ -863,8 +869,10 @@
               T.rs = 1.75 + 0.35 * kw; T.ra = 1.2; T.re = 0.7 * kw; T.ls = 1.6; T.la = 0.5; T.le = 0.4; T.yaw = 0.8 * kw; T.roll = -0.18 * kw;
             } else if (style === 'flick') { // «из воды»: толчок снизу без подъёма мяча
               T.rs = 1.3 - 0.3 * kw; T.ra = 0.35; T.re = 0.9; T.ls = 1.4; T.la = 0.6; T.le = 0.5; T.pitch = 0.5;
-            } else if (style === 'back') { // разворот центрового
-              T.rs = 2.3 + 0.4 * kw; T.ra = 0.9; T.re = 0.4; T.yaw = -0.6 * kw; T.ls = 1.5; T.la = 0.7;
+            } else if (style === 'back') { // колотушка: спиной к воротам мяч у воды перед собой, рука уходит поперёк тела, плечо вперёд
+              const ez = kw * kw * (3 - 2 * kw);
+              T.rs = 1.05 + 0.2 * ez; T.ra = 0.25 - 0.55 * ez; T.re = 0.35 + 0.2 * ez; T.yaw = 0.15 + 0.4 * ez; T.pitch = 0.18 + 0.12 * ez; T.roll = 0.08 * ez;
+              T.ls = 1.25; T.la = 0.85; T.le = 0.6;
             } else { // сверху — как в жизни и как в каче: с изготовки мяч уходит назад-вверх, корпус заворачивается, вторая рука на ворота
               const ez = kw * kw * (3 - 2 * kw), A = PUMP.ready, B = PUMP.shot;
               // Пока игрок держит бросок, он «качает» — мяч чуть ходит вперёд-назад
@@ -877,7 +885,11 @@
           case 'release':
             if (act.style === 'side') { T.rs = 1.6 - 0.2 * k; T.ra = 1.2 - 1.0 * Math.min(1, k * 1.6); T.re = 0.1; T.yaw = -0.5 * k; T.roll = 0.1; }
             else if (act.style === 'flick') { T.rs = 1.0 + 0.9 * Math.min(1, k * 2); T.ra = 0.3; T.re = 0.1; T.pitch = 0.45; }
-            else if (act.style === 'back') { T.rs = 2.7 - 3.1 * Math.min(1, k * 1.6); T.ra = 0.9; T.re = 0.1; T.yaw = 0.7 * k; }
+            else if (act.style === 'back') { // хлёст назад почти прямой рукой: мяч уходит за спину в ворота, плечо — назад, корпус — вперёд
+              const w = eout(Math.min(1, k / 0.45));
+              T.rs = 1.25 - 2.25 * w; T.ra = -0.3 + 0.75 * w; T.re = 0.55 - 0.45 * w; T.yaw = 0.55 - 1.15 * w; T.pitch = 0.3 + 0.15 * w; T.roll = 0.08 - 0.2 * w;
+              T.ls = 1.25 + 0.3 * w; T.la = 0.85; T.le = 0.6;
+            }
             else {
               // Хлёст: плечо, затем локоть, корпус проворачивается к воротам; рука проходит до конца, вниз и через тело
               // До выпуска — тот же выброс, что в каче (поэтому кач и похож на бросок), дальше рука проходит вниз и через тело
@@ -937,9 +949,14 @@
             T.rs = 2.95 + 0.2 * Math.sin(t * 9); T.ra = 0.35; T.re = 0.2;
             T.ls = 2.95 + 0.2 * Math.sin(t * 9 + 1.5); T.la = 0.35; T.le = 0.2;
             break;
-          case 'dive':
+          case 'dive': { // выпрыгивание: мощный толчок ногами (ножницы, колени выпрямляются), корпус тянется за рукой
             gkIK = true; fast = true;
+            const kick = Math.sin(Math.PI * Math.min(1, act.t / 0.35)), sc = Math.sin(act.t * 22);
+            T.hrs = 1.0 + 0.5 * sc * kick; T.hls = 1.0 - 0.5 * sc * kick; T.hra = 0.5; T.hla = 0.5;
+            T.hrk = -1.3 + 1.0 * kick; T.hlk = -1.3 + 1.0 * kick;
+            T.pitch = (this.gkHand.y > 1.0 ? -0.15 : 0.1) * kick;
             break;
+          }
         }
       }
       // «Руки»: обе руки вверх, ладони на виду у судьи
