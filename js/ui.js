@@ -116,11 +116,11 @@ WP.UI = (function () {
     });
     $('pHelp').addEventListener('click', () => openHelp('rules'));
     $('pRestart').addEventListener('click', () => cb.restart());
-    $('pMenu').addEventListener('click', () => { if (match && match.cfg.career) cb.careerReturn(true); else cb.menu(); });
-    $('brkMenu').addEventListener('click', () => { if (match && match.cfg.career) cb.careerReturn(true); else cb.menu(); });
+    $('pMenu').addEventListener('click', () => { if (match && match.cfg.career) cb.careerReturn(true); else if (match && match.cfg.cup) cb.cupReturn(); else cb.menu(); });
+    $('brkMenu').addEventListener('click', () => { if (match && match.cfg.career) cb.careerReturn(true); else if (match && match.cfg.cup) cb.cupReturn(); else cb.menu(); });
     $('brkNext').addEventListener('click', () => {
       $('brk').hidden = true;
-      if (match.state === 'final') { if (match.cfg.career) cb.careerReturn(false); else if (match.cfg.net) cb.menu(); else cb.restart(); } else if (!match.cfg.net) match.nextPeriod();
+      if (match.state === 'final') { if (match.cfg.career) cb.careerReturn(false); else if (match.cfg.cup) cb.cupReturn(); else if (match.cfg.net) cb.menu(); else cb.restart(); } else if (!match.cfg.net) match.nextPeriod();
     });
     $('toGo').addEventListener('click', () => match.endTimeout());
     $('luGo').addEventListener('click', () => {
@@ -636,7 +636,7 @@ WP.UI = (function () {
     $('pause').hidden = !on;
     if (!on) $('tac').hidden = true;
     const car = !!(match && match.cfg.career);
-    $('pRestart').hidden = car || !!(match && match.cfg.net);
+    $('pRestart').hidden = car || !!(match && (match.cfg.net || match.cfg.cup));
     $('pTac').hidden = !(match && match.teams.some(t => t.human));
     $('pMenu').textContent = car ? 'Досимулировать и выйти' : match && match.cfg.net ? 'Выйти из онлайн-матча' : 'В меню';
     if (on && match) {

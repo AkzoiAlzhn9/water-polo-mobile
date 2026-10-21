@@ -127,12 +127,14 @@
       document.getElementById('menu').innerHTML = '<div class="menu-panel"><h1 class="title">WATER POLO<span>MOBILE</span></h1><p class="lede">Не удалось запустить WebGL. Откройте страницу в свежем Chrome, Safari или Firefox с включённым аппаратным ускорением.</p></div>';
       return;
     }
-    WP.UI.init({ start, pause: togglePause, cam: cycleCam, mute: toggleMute, restart, menu: startDemo, demoNext: startDemo, career: openCareer, careerReturn: backToCareer, tutorial: startTutorial, gfx: setGfx, online: () => WP.Net.openLobby() });
+    WP.UI.init({ start, pause: togglePause, cam: cycleCam, mute: toggleMute, restart, menu: startDemo, demoNext: startDemo, career: openCareer, careerReturn: backToCareer, cupReturn: backToCup, tutorial: startTutorial, gfx: setGfx, online: () => WP.Net.openLobby() });
     WP.Net.bindUi();
     WP.Net.start();
     WP.Net.setHooks({ start, beforeJoin: () => { if (match && !isDemo && !(match.cfg.net)) startDemo(); }, notice: (text) => { if (match && match.cfg.net) match.emit('banner', { title: 'ОНЛАЙН', sub: text, tone: 'neutral' }); }, left: (text) => { if (match && match.cfg.net) { if (WP.Net.role === 'host') match.teams[1].human = null; match.emit('banner', { title: 'ОНЛАЙН', sub: text, tone: 'red' }); if (WP.Net.role === 'guest') setTimeout(startDemo, 3500); } } });
     setGfx(WP.UI.gfx);
     WP.Career.setHooks({ play: (cfg) => start(cfg), menu: () => WP.UI.showMenu(true) });
+    WP.Cup.setHooks({ play: (cfg) => start(cfg), menu: () => WP.UI.showMenu(true), open: openCup, playing: () => !isDemo });
+    WP.Cup.bindUi();
     WP.UI.setMuteIcon(WP.Audio.muted);
     startDemo();
     requestAnimationFrame(loop);
@@ -236,6 +238,20 @@
     document.getElementById('hud').hidden = true;
     document.body.classList.remove('playing');
     WP.Career.open();
+  }
+  // ---------- турнир ----------
+  function openCup() {
+    if (!isDemo) startDemo();
+    WP.UI.showMenu(false);
+    document.getElementById('hud').hidden = true;
+    document.body.classList.remove('playing');
+    WP.Cup.open();
+  }
+  function backToCup() {
+    if (match && match.cfg.cup) WP.Cup.finishMatch(match);
+    paused = false; WP.UI.showPause(false);
+    Replay.reset();
+    openCup();
   }
   function backToCareer(simRest) {
     const m = match;

@@ -95,7 +95,7 @@ WP.Net = (function () {
       const tr = await d.ref('nicks/' + low).transaction((cur) => (cur === null || cur === uid ? uid : undefined));
       if (!tr.committed) { msg = 'Ник «' + nick + '» уже занят — придумай другой'; render(); return; }
       if (prof && prof.nickLower && prof.nickLower !== low) await d.ref('nicks/' + prof.nickLower).remove().catch(() => {});
-      await d.ref('profiles/' + uid).set({ nick, nickLower: low, photo: me.avatarUrl || '', t: TS() });
+      await d.ref('profiles/' + uid).update({ nick, nickLower: low, photo: me.avatarUrl || '', t: TS() }); // update: рейтинг (elo) остаётся
       msg = 'Готово: твой ник — ' + nick; editNick = false;
     } catch (e) { msg = dbErr(e); }
     render();
@@ -278,7 +278,42 @@ WP.Net = (function () {
     } catch (e) { /* база недоступна — берём из браузера */ }
     try { Object.assign(stats, JSON.parse(localStorage.getItem('polo25_online') || '{}')); } catch (e) { /* пусто */ }
   }
+  // ---------- рейтинг Эло (онлайн): profiles/<uid>/elo = { r, g, w, d, l }; профили и так читают все вошедшие ----------
+  // Перед матчем рейтинг сразу пишется как за поражение — кто вышел посреди матча, так и остаётся с поражением;
+  // в конце пишется настоящий результат от рейтинга до матча. Каждый пишет только свой рейтинг (правила базы — те же).
+  const ELO0 = 1000;
+  const eloOf = (p) => (p && p.elo && +p.elo.r) || ELO0;
+  const eloCache = {};
+  async function eloFetch(uid) {
+    if (!fb || !uid) return ELO0;
+    // Соперник уже записал «предварительное поражение» — берём его рейтинг до матча (p0), иначе расчёт у двоих не сойдётся
+    try { const sn = await fb.db.ref('profiles/' + uid + '/elo').get(); const v = sn.val(); eloCache[uid] = v || { r: ELO0, g: 0 }; return (v && +(v.p0 && v.t && serverNow() - v.t < 40 * 60e3 ? v.p0 : v.r)) || ELO0; } catch (e) { return ELO0; }
+  }
+  function eloNext(e, myR, oppR, sc) {
+    const g = (e && +e.g) || 0, K = g < 10 ? 40 : 28, E = 1 / (1 + Math.pow(10, (oppR - myR) / 400));
+    return Math.round(myR + K * (sc - E));
+  }
+  async function eloBegin(g, oppUid) {
+    if (!fb || mock || !oppUid || !fb.auth.currentUser) return;
+    const uid = fb.auth.currentUser.uid, e = (prof && prof.elo) || { r: ELO0, g: 0, w: 0, d: 0, l: 0 };
+    g.elo = { r0: +e.r || ELO0, e, opp: oppUid, oppR: ELO0 };
+    g.elo.oppR = await eloFetch(oppUid);
+    if (!g.elo || g.elo.done) return;
+    const r = eloNext(e, g.elo.r0, g.elo.oppR, 0);
+    fb.db.ref('profiles/' + uid + '/elo').set({ r, p0: g.elo.r0, g: (+e.g || 0) + 1, w: +e.w || 0, d: +e.d || 0, l: (+e.l || 0) + 1, t: TS() }).catch(() => {});
+  }
+  async function eloFinish(g, my, opp) {
+    if (!g || !g.elo || g.elo.done || !fb || !fb.auth.currentUser) return;
+    const E = g.elo, e = E.e, sc = my > opp ? 1 : my < opp ? 0 : 0.5;
+    E.done = true;
+    const r = eloNext(e, E.r0, E.oppR, sc), uid = fb.auth.currentUser.uid;
+    try { await fb.db.ref('profiles/' + uid + '/elo').set({ r, g: (+e.g || 0) + 1, w: (+e.w || 0) + (sc === 1 ? 1 : 0), d: (+e.d || 0) + (sc === 0.5 ? 1 : 0), l: (+e.l || 0) + (sc === 0 ? 1 : 0), t: TS() }); } catch (x) { return; }
+    const dlt = r - E.r0;
+    notice('Рейтинг: ' + E.r0 + ' → ' + r + ' (' + (dlt >= 0 ? '+' : '') + dlt + ')');
+  }
+
   async function saveResult(my, opp) {
+    eloFinish(game, my, opp);
     stats.gf += my; stats.ga += opp;
     if (my > opp) stats.w++; else if (my < opp) stats.l++; else stats.d++;
     try { localStorage.setItem('polo25_online', JSON.stringify(stats)); } catch (e) { /* нет хранилища */ }
@@ -389,6 +424,7 @@ WP.Net = (function () {
     let away = g.presence.team && WP.TEAMS.some(t => t.code === g.presence.team) ? g.presence.team : 'AS2';
     if (away === game.team) away = (WP.TEAMS.find(t => t.code !== game.team && t.code !== 'KAZ') || WP.TEAMS[1]).code;
     game.phase = 'play'; game.guestPeer = g.peer; game.away = away;
+    eloBegin(game, g.by);
     game.room.presence({ phase: 'play', away, gp: g.peer }).catch(() => {});
     if (search) quickStop(true);
     room.presence({ busy: true, inv: null, st: 'play' }).catch(() => {});
@@ -398,6 +434,7 @@ WP.Net = (function () {
   }
   function startAsGuest(h) {
     game.phase = 'play';
+    eloBegin(game, h.by);
     room.presence({ st: 'play' }).catch(() => {});
     closeLobby();
     hooks.start({ home: teamDef(h.presence.team), away: teamDef(h.presence.away), mode: '1p', humanSide: 1, periodMin: h.presence.len || 4, difficulty: 1, shootout: true, net: { role: 'guest', code: game.code } });
@@ -972,6 +1009,13 @@ WP.Net = (function () {
     if (!ids.length && !reqs.length) h += '<p class="small muted">Пока никого. Впиши ник друга или нажми «+» рядом с игроком в сети.</p>';
     h += '<div class="on-code"><input id="onFriend" maxlength="16" autocomplete="off" placeholder="ник друга"><button class="btn" data-net="fadd">Добавить</button></div>';
     h += '<p class="small muted" style="margin:6px 0 0">Твой ник: <b>' + esc(prof.nick) + '</b> · <button class="linkish" data-net="nickedit">изменить</button></p></div>';
+    // Рейтинг: ты и друзья по очкам Эло (рейтинги друзей подгружаются один раз)
+    const myE = (prof && prof.elo) || { r: ELO0, g: 0 }, uid = fb && fb.auth.currentUser ? fb.auth.currentUser.uid : '';
+    const need = ids.filter(f => !eloCache[f] && !eloCache[f + '?']);
+    if (need.length) { for (const f of need) eloCache[f + '?'] = 1; Promise.all(need.map(eloFetch)).then(render); }
+    const tab = [{ nick: prof.nick + ' (ты)', r: +myE.r || ELO0, g: +myE.g || 0, me: true }].concat(ids.map(f => ({ nick: nameCache[f] || (friends[f] && friends[f].nick) || 'Друг', r: (eloCache[f] && +eloCache[f].r) || ELO0, g: (eloCache[f] && +eloCache[f].g) || 0 }))).sort((a, b) => b.r - a.r);
+    h += '<div class="tac-sec"><div class="tac-lbl">Рейтинг · Эло</div>' + tab.map((t, i) => '<div class="on-game"><span class="on-rank">' + (i + 1) + '</span><span><b>' + (t.me ? '<u>' + esc(t.nick) + '</u>' : esc(t.nick)) + '</b><small>' + t.g + ' ' + (t.g % 10 === 1 && t.g % 100 !== 11 ? 'матч' : t.g % 10 >= 2 && t.g % 10 <= 4 && (t.g % 100 < 10 || t.g % 100 >= 20) ? 'матча' : 'матчей') + (myE.w !== undefined && t.me ? ' · ' + (+myE.w || 0) + '–' + (+myE.d || 0) + '–' + (+myE.l || 0) : '') + '</small></span><b class="on-elo">' + t.r + '</b></div>').join('') +
+      '<p class="small muted" style="margin:6px 0 0">Победа над сильным даёт больше очков. Вышел из матча раньше времени — засчитывается поражение.</p></div>';
     return h;
   }
   function renderInto(el) {
