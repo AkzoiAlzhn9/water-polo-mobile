@@ -668,6 +668,7 @@
       if (this.action && this.action.type === 'block') v *= 0.45;
       if (this.action && (this.action.type === 'drawfoul' || this.action.type === 'fake')) v *= 0.4;
       if (this.stunT > 0) v *= 0.4;
+      if (this.heldT > 0) v *= 1 - 0.22 * this.held; // держат вплотную
       v *= 0.8 + 0.2 * this.stamina;
       return v;
     }
@@ -728,6 +729,7 @@
       const up = this.liftTarget > this.lift;
       this.lift += (this.liftTarget - this.lift) * Math.min(1, dt * (up ? (this.action && this.action.type === 'windup' ? 11 : 7) : 3));
       if (this.grabT > 0) this.grabT -= dt;
+      if (this.heldT > 0) { this.heldT -= dt; if (this.heldT <= 0) this.held = 0; }
       if (this.stealCD > 0) this.stealCD -= dt;
       if (this.stunT > 0) this.stunT -= dt;
       if (this.screenT > 0) this.screenT -= dt;

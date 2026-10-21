@@ -150,6 +150,8 @@ WP.UI = (function () {
   function renderHero() {
     const set = (id, t) => { const el = $(id); el.querySelector('.hv-flag').innerHTML = WP.flag(t.code); el.querySelector('b').textContent = t.code; el.querySelector('small').textContent = t.name; };
     set('hvH', WP.TEAMS[cfg.home]); set('hvA', WP.TEAMS[cfg.away]);
+    // Цвета команд — фон карточки матча делится на две половины в их цветах
+    $('btnPlay').style.setProperty('--hc', WP.TEAMS[cfg.home].color || '#1f4f80'); $('btnPlay').style.setProperty('--ac', WP.TEAMS[cfg.away].color || '#1f4fd1');
     const DIFF = ['любитель', 'профи', 'мировой класс'];
     $('hvTag').textContent = cfg.mode === '2p' ? 'Матч вдвоём' : cfg.mode === 'demo' ? 'Смотреть матч ИИ' : 'Матч против ИИ';
     $('hvMeta').textContent = '4 × ' + cfg.len + ' мин' + (cfg.mode === '1p' ? ' · ' + DIFF[cfg.diff] + ' · за ' + (cfg.side ? 'гостей' : 'хозяев') : '');
@@ -377,7 +379,9 @@ WP.UI = (function () {
   function pct(a, b) { return a + '/' + b; }
   function statsTable(m) {
     const [a, b] = m.teams;
-    const row = (label, x, y) => '<tr><td>' + x + '</td><td>' + label + '</td><td>' + y + '</td></tr>';
+    // Строка статистики: числа по краям, под названием — полоса «кто больше» в цветах команд
+    const num = (v) => { const n = parseFloat(String(v)); return isFinite(n) ? n : 0; };
+    const row = (label, x, y) => { const vx = num(x), vy = num(y), sum = vx + vy, w = sum > 0 ? Math.round(100 * vx / sum) : 50; return '<tr><td>' + x + '</td><td>' + label + '<div class="cmp"><i style="width:' + w + '%"></i></div></td><td>' + y + '</td></tr>'; };
     return '<tr><th>' + a.code + '</th><th></th><th>' + b.code + '</th></tr>' +
       row('Голы', a.score, b.score) +
       row('Броски (в створ)', a.stats.shots + ' (' + a.stats.onTarget + ')', b.stats.shots + ' (' + b.stats.onTarget + ')') +
@@ -575,7 +579,7 @@ WP.UI = (function () {
   const TAC = {
     att: { label: 'Нападение (6 на 6)', opts: [['33', '3-3', 'Трое у 2 м (крайние 1 и 5, центровой 6), трое на 5–7 м (2, 3, 4). Классика: игра через центрового.'], ['arc', 'Зонтик', 'Полевые по дуге на 5–7 м, центровой — «ручка» зонтика. Много места для проходов и заслонов, хорош против прессинга.'], ['42', '4-2', 'Два центровых у штанг и четверо на 5 м. Давит у ворот, но бросков издали меньше.']] },
     pp: { label: 'Большинство (6 на 5)', opts: [['42', '4-2', 'Двое на штангах, четверо на 5 м — стандарт большинства: мяч ходит по дуге, пока кто-то не откроется.'], ['33', '3-3', 'Трое на 2 м, трое на 5 м: больше передач к воротам и кросс-пасов через центр.']] },
-    def: { label: 'Защита', opts: [['man', 'Опека', 'Каждый держит своего, дальние чуть отходят к центровому.'], ['press', 'Прессинг', 'Плотно у каждого, без отходов: мешает пасам, но легко пропустить проход или получить удаление.'], ['zone', 'Зона', 'Каждый держит участок, к мячу выходит ближайший. Закрывает центр, оставляет броски издали.'], ['mdrop', 'M-зона', 'Защитник разыгрывающего отходит к центровому (двойная опека), остальные — в «щели». Против сильного центрового.']] },
+    def: { label: 'Защита', opts: [['auto', 'Авто', 'Как настоящие команды: сильный центровой соперника — отход в зону (4-drop или M-drop), иначе плотная опека, у сильной команды — прессинг.'], ['man', 'Опека', 'Каждый держит своего, дальние чуть отходят к центровому.'], ['press', 'Прессинг', 'Плотно у каждого, без отходов: мешает пасам, но легко пропустить проход или получить удаление.'], ['zone', 'Зона', 'Каждый держит участок, к мячу выходит ближайший. Закрывает центр, оставляет броски издали.'], ['mdrop', 'M-зона', 'Защитник разыгрывающего отходит к центровому (двойная опека), остальные — в «щели». Против сильного центрового.']] },
     move: { label: 'Стиль атаки', opts: [['hold', 'Держать позиции', 'Игроки стоят на своих точках и бросают из позиции; проходы — только в розыгрышах.'], ['motion', 'Движение', 'Проходы к воротам и смена позиций по ходу атаки.']] },
   };
   const ROLE_S = { GK: 'ВРТ', CF: 'ЦН', CB: 'ЦЗ', W: 'КР', D: 'УН' };
@@ -700,7 +704,7 @@ WP.UI = (function () {
   function updateText(m) {
     const [a, b] = m.teams;
     $('sbHc').textContent = a.code; $('sbAc').textContent = b.code;
-    if (flagKey !== a.code + b.code) { flagKey = a.code + b.code; $('sbHf').innerHTML = WP.flag(a.code); $('sbAf').innerHTML = WP.flag(b.code); }
+    if (flagKey !== a.code + b.code) { flagKey = a.code + b.code; $('sbHf').innerHTML = WP.flag(a.code); $('sbAf').innerHTML = WP.flag(b.code); const sb = document.querySelector('.sb'); if (sb) { sb.style.setProperty('--tc0', a.def.color || '#ccc'); sb.style.setProperty('--tc1', b.def.color || '#2a5ae0'); } }
     $('sbHs').textContent = a.score; $('sbAs').textContent = b.score;
     const holder = m.ball.holder;
     const poss = holder ? holder.team : (m.restart ? m.restart.team : m.possession);

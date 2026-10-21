@@ -401,6 +401,35 @@
     return null;
   };
 
+  // Плотность опеки от силы команды: сильные (Сербия 91) держат вплотную и почти не отходят, слабые (Казахстан 73) — свободнее
+  AI.tightness = (team) => clamp((((team.def && team.def.rating) || 84) - 72) / 19, 0, 1);
+  // Защита «Авто» — как играют настоящие команды (разбор Smarter Polo «Defense 101»): всё решает центровой соперника.
+  // Выиграл позицию или заметно сильнее нашего центрового защитника — отход в зону: 4-drop (защитник позиции 4
+  // отходит на центрового), очень опасен — M-drop (защитник разыгрывающего); центровой закрыт спереди — прессинг
+  // у сильной команды, плотная опека у остальных. Пересматривается раз в 2 с, смена режима — с запасом.
+  AI.autoDef = function (match, team, attackers, field) {
+    const ai = team.ai, opp = team.opp;
+    if (ai.adT > match.t && ai.adMode) return ai.adMode;
+    ai.adT = match.t + 2;
+    const gdo = (p) => AI.goalDist(opp, p.x, p.z);
+    const set = attackers.find(a => a.slotName === 'hole' || a.slotName === 'post') || attackers.slice().sort((a, b) => gdo(a) - gdo(b))[0];
+    let mode = 'man';
+    if (set && gdo(set) < 4.5) {
+      const A = set.attrs, setPow = A.str * 0.5 + A.sht * 0.3 + A.acc * 0.2;
+      const cb = field.slice().sort((a, b) => (b.attrs.def + b.attrs.str) - (a.attrs.def + a.attrs.str))[0];
+      const cbPow = cb ? cb.attrs.def * 0.5 + cb.attrs.str * 0.5 : 75;
+      const m = field.find(d => d.mark === set);
+      const inside = m && gdo(m) > gdo(set) - 0.15 ? 1 : 0; // защитник центрового не между ним и воротами
+      const danger = (setPow - cbPow) / 6 + inside * 0.8 + (team.def && team.def.style && team.def.style.def ? 0.25 : 0);
+      const hyst = ai.adMode === 'mdrop' ? -0.2 : ai.adMode === 'drop4' ? -0.15 : 0;
+      if (danger > 1.35 + hyst) mode = 'mdrop';
+      else if (danger > 0.6 + hyst) mode = 'drop4';
+    }
+    if (mode === 'man' && AI.tightness(team) > 0.7 && ((team.def && team.def.rating) || 84) >= ((opp.def && opp.def.rating) || 84)) mode = 'press';
+    if (mode !== ai.adMode) { ai.adMode = mode; ai.dirty = true; }
+    return mode;
+  };
+
   AI.defenseTargets = function (match, team, field) {
     const ai = team.ai, ball = match.ball, opp = team.opp;
     ai.pressing = false;
@@ -433,7 +462,8 @@
       }
       return;
     }
-    const dt0 = team.tac ? team.tac.def : 'man';
+    let dt0 = team.tac ? team.tac.def : 'man';
+    if (dt0 === 'auto') dt0 = AI.autoDef(match, team, attackers, field);
     // Зона 6 на 6: каждый держит свой участок, к игроку с мячом выходит ближайший
     if (dt0 === 'zone' && field.length >= 6) {
       const shift = clamp(ball.pos.z * 0.25, -1.2, 1.2);
@@ -463,9 +493,12 @@
     // Прессинг: по выбору тактики или в концовке, когда команда проигрывает
     ai.pressing = dt0 === 'press' || (match.period === 4 && match.clock < 75 && team.score < opp.score);
     // M-зона: защитник разыгрывающего (дальнего по центру) отходит к центровому, остальные встают в «щели»
-    const mdrop = dt0 === 'mdrop';
+    const mdrop = dt0 === 'mdrop', drop4 = dt0 === 'drop4';
     let dropA = null;
     if (mdrop && !ai.pressing) dropA = attackers.filter(a => a !== carrier && Math.abs(a.z) < 2.6).sort((a, b) => AI.lineD(opp, b.x) - AI.lineD(opp, a.x))[0] || null;
+    // 4-drop: отходит защитник игрока на позиции 4 (полузащитник слева от атакующих — у правшей бросок оттуда слабее)
+    if (drop4 && !ai.pressing) dropA = attackers.find(a => a !== carrier && a.slot === 3) || attackers.filter(a => a !== carrier && a.z * opp.dir < -0.8 && AI.lineD(opp, a.x) > 3.5).sort((a, b) => Math.abs(a.z) - Math.abs(b.z))[0] || null;
+    const tight = ai.pressing ? 1 : AI.tightness(team);
     ai.markT = (ai.markT || 0) - 0.15;
     if (ai.markT <= 0 || ai.dirty || field.some(p => !p.mark || !p.mark.active || p.mark.team !== opp)) {
       ai.markT = 1.2; ai.dirty = false;
@@ -498,14 +531,15 @@
       const gx = ownX - a.x, gz = -a.z, gl = Math.hypot(gx, gz) || 1;
       const isCarrier = a === carrier;
       const nearGoal = AI.goalDist(opp, a.x, a.z) < 3.4;
-      const dd = (isCarrier ? 0.78 : nearGoal ? 0.5 : 0.95) * (ai.pressing ? 0.7 : 1);
+      // Плотность: сильная команда стоит вплотную (≈0,5 м), слабая — на расстоянии ≈0,9 м; прессинг — ещё ближе
+      const dd = (isCarrier ? 0.78 - 0.18 * tight : nearGoal ? 0.5 - 0.1 * tight : 0.92 - 0.42 * tight) * (ai.pressing ? 0.8 : 1);
       let tx = a.x + gx / gl * dd, tz = a.z + gz / gl * dd;
       if (!isCarrier && !nearGoal && !ai.pressing) {
         const db = Math.hypot(a.x - ball.pos.x, a.z - ball.pos.z);
-        const sag = clamp((db - 4) / 9, 0, 0.5) * ai.sag;
+        const sag = clamp((db - 4) / 9, 0, 0.5) * ai.sag * (1 - 0.75 * tight); // плотные команды почти не отходят от своего
         tx += (holeHelp.x - tx) * sag; tz += (holeHelp.z - tz) * sag;
       }
-      if (dropA && a === dropA) { const h = AI.att(opp, 3.6, clamp(ball.pos.z * 0.15, -0.8, 0.8)); tx = h.x + (a.x - h.x) * 0.25; tz = h.z + (a.z - h.z) * 0.25; }
+      if (dropA && a === dropA) { const h = AI.att(opp, drop4 ? 3.0 : 3.6, drop4 ? -1.0 : clamp(ball.pos.z * 0.15, -0.8, 0.8)); tx = h.x + (a.x - h.x) * 0.25; tz = h.z + (a.z - h.z) * 0.25; }
       else if (mdrop && !isCarrier && !nearGoal) { tx += (holeHelp.x - tx) * 0.35; tz += (holeHelp.z - tz) * 0.35; }
       // Защитник игрока с мячом встаёт ему на путь (с упреждением по скорости), остальные — как раньше
       tx += a.vx * (isCarrier ? 0.55 : 0.3); tz += a.vz * (isCarrier ? 0.55 : 0.3);

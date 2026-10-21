@@ -33,7 +33,7 @@
       this.tac = {
         att: st.pas ? 'arc' : hv < 0.18 ? '42' : hv < 0.5 ? 'arc' : '33',
         pp: hv > 0.8 ? '33' : '42',
-        def: st.def ? 'mdrop' : hv > 0.86 ? 'zone' : 'man',
+        def: 'auto', // как настоящие команды: зона против сильного центрового, иначе опека/прессинг по силе (AI.autoDef)
         move: 'hold', autoSubs: true,
       };
       this.stats = { shots: 0, onTarget: 0, saves: 0, exclEarned: 0, exclCommitted: 0, ppGoals: 0, ppAtt: 0, penEarned: 0, penGoals: 0, steals: 0, blocks: 0, fouls: 0, turnovers: 0, counterGoals: 0 };
@@ -1207,9 +1207,18 @@
             const h = ball.holder;
             if (h && h.team === team && h !== p) { team.callFor = { p, t: this.t }; this.emit('callball', { p }); }
           } else if (inp.pass) {
-            const others = team.players.filter(q => q.active && !q.isGK && q !== p)
-              .sort((a, b) => Math.hypot(a.x - ball.pos.x, a.z - ball.pos.z) - Math.hypot(b.x - ball.pos.x, b.z - ball.pos.z));
-            if (others[0]) { this.setControl(id, others[0]); cb.stage = 0; }
+            // Смена игрока как в FIFA: направление стика/WASD (в том числе с зажатым рывком) — защитник в ту сторону;
+            // без направления — тот, кто лучше всего встанет на мяч: ближе к мячу и между мячом и своими воротами
+            const cand = team.players.filter(q => q.active && !q.isGK && q !== p && !q.excluded);
+            const mag = Math.hypot(inp.x || 0, inp.z || 0), gx = -team.dir * R.HALF_L;
+            let best = null, bs = -1e9;
+            for (const q of cand) {
+              const dx = q.x - p.x, dz = q.z - p.z, d = Math.hypot(dx, dz) || 1;
+              const db = Math.hypot(q.x - ball.pos.x, q.z - ball.pos.z), goalSide = (Math.abs(ball.pos.x - gx) - Math.abs(q.x - gx)) > 0 ? 0.6 : 0;
+              const sc = mag > 0.35 ? (dx * inp.x + dz * inp.z) / (d * mag) * 6 - d * 0.22 : -db + goalSide;
+              if (sc > bs) { bs = sc; best = q; }
+            }
+            if (best) { this.setControl(id, best); cb.stage = 0; this.emit('switch', { p: best }); }
           }
           if (p.hands) { /* с поднятыми руками не отбирают */ }
           else if (inp.lob) { this.doBlock(p); cb.stage = 1; cb.t = this.t; this.emit('combo', { id, stage: 1 }); }
@@ -1361,6 +1370,7 @@
         if (gk && gk.active) { AI.gkUpdate(this, gk, dt); AI.gkSaveStep(this, gk, dt); }
       }
       for (const p of this.all()) this.updateAction(p, dt);
+      this.contactHold();
       if (this.state !== 'sprint' && this.state !== 'intro') for (const p of this.all()) p.move(dt, this.boundsFor(p));
       this.separate();
       switch (this.state) {
@@ -1384,6 +1394,24 @@
         this.aiChallengeAt = 0;
         const c = this.lastCall;
         if (c && !c.against.human) this.requestChallenge(c.against);
+      }
+    }
+
+    // Плотная опека: кого защитник держит вплотную со стороны своих ворот, тот плывёт медленнее — тем сильнее,
+    // чем плотнее играет команда защитника (AI.tightness). Касается и людей, и ИИ, в обе стороны.
+    contactHold() {
+      if (this.state !== 'live') return;
+      for (const t of this.teams) {
+        const tight = AI.tightness(t), gx = -t.dir * R.HALF_L;
+        for (const d of t.players) {
+          if (!d.active || d.isGK || d.excluded || d.hasBall) continue;
+          let a = null, best = 0.95;
+          for (const q of t.opp.players) { if (!q.active || q.isGK) continue; const dist = Math.hypot(q.x - d.x, q.z - d.z); if (dist < best) { best = dist; a = q; } }
+          if (!a || Math.abs(a.x - gx) - Math.abs(d.x - gx) < -0.3) continue;
+          const k = Math.min(1, (0.45 + 0.55 * tight) * (1 - best / 0.95) * 1.6);
+          if (k > (a.heldT > 0 ? a.held : 0)) a.held = k;
+          a.heldT = 0.2;
+        }
       }
     }
 

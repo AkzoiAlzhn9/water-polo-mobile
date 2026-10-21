@@ -1,6 +1,6 @@
 <!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#06121c"><link rel="manifest" href="manifest.webmanifest"><link rel="apple-touch-icon" href="apple-touch-icon.png"><link rel="icon" href="icon-192.png"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="Water polo"><script>if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(function () {});</script></head><body>
 <title>Water polo mobile</title>
-<meta name="description" content="Реалистичное 3D водное поло по правилам World Aquatics 2025/26">
+<meta name="description" content="Реалистичное 3D водное поло по международным правилам 2025/26">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Sans+Extra+Condensed:ital,wght@0,500;0,600;0,800;1,800&family=Golos+Text:wght@400;500;600&display=swap">
@@ -651,6 +651,135 @@ body.lefty.tb-large #stick { transform-origin: bottom right; }
 @keyframes sweep { to { left: 120%; } }
 @keyframes goalPop { from { transform: skewX(-8deg) scale(.55); opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { #feed .ln { animation: none; } #banner { transition: none; } #banner.goal .b-title, #banner.goal .b-title::after, .logo-ball, .cover, .setup { animation: none !important; } }
+
+/* ================= Дизайн-система v2: спортивная трансляция ================= */
+:root {
+  --ink: #04080e;
+  --glass: rgba(9, 18, 29, .72);
+  --glass-hi: rgba(18, 34, 52, .82);
+  --edge: rgba(160, 214, 238, .16);
+  --edge-hi: rgba(255, 210, 110, .55);
+  --gold: #ffc23a; --gold-2: #ff9d1c;
+  --aqua: #34e0ff;
+  --shadow: 0 24px 60px rgba(0, 0, 0, .55);
+  --ease: cubic-bezier(.2, .8, .2, 1);
+}
+/* Стекло: размытие фона, тонкая светлая кромка, блик сверху */
+.card, .tile, .team-pick, .cr-card, #pcard, #radar, .pwa-hint {
+  background: linear-gradient(180deg, rgba(255,255,255,.055), rgba(255,255,255,0) 38%), var(--glass);
+  border: 1px solid var(--edge);
+}
+/* Без backdrop-filter: поверх 3D-сцены оно пересчитывается каждый кадр и на телефонах заметно садит FPS */
+*, *::before, *::after { backdrop-filter: none !important; -webkit-backdrop-filter: none !important; }
+.tile, #pcard, #radar, .pwa-hint, .icon-btn { background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,0) 40%), rgba(8, 17, 28, .86); }
+.scrim { background: radial-gradient(120% 90% at 50% 40%, rgba(3,10,18,.72), rgba(2,6,11,.92)); }
+/* Внутри затемнения фон уже размыт — у карточки своё размытие не нужно (вложенное размытие на части телефонов рисуется пустым) */
+.scrim .card, .scrim .team-pick, .scrim .tile { backdrop-filter: none; -webkit-backdrop-filter: none; background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,0) 38%), rgba(9, 18, 29, .94); }
+.card { border-radius: 16px; box-shadow: var(--shadow), inset 0 1px 0 rgba(255,255,255,.08); position: relative; padding: 26px 28px 24px; animation: cardIn .35s var(--ease) both; }
+.card::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 3px; border-radius: 16px 16px 0 0; background: linear-gradient(90deg, var(--aqua), var(--gold) 55%, var(--gold-2)); opacity: .9; }
+@keyframes cardIn { from { opacity: 0; transform: translateY(14px) scale(.985); } }
+.card h2 { font: italic 800 38px/1 var(--display); text-transform: uppercase; letter-spacing: .01em; }
+.card h2::after { content: ""; display: block; width: 46px; height: 4px; margin-top: 10px; background: var(--gold); transform: skewX(-24deg); }
+/* Кнопки: скошенные, как плашки ТВ-графики; главная — золото с бликом */
+.btn { border-radius: 4px; clip-path: polygon(8px 0, 100% 0, calc(100% - 8px) 100%, 0 100%); padding: 11px 22px; font: 600 15px var(--display); letter-spacing: .06em; text-transform: uppercase; background: rgba(255,255,255,.06); border-color: transparent; transition: background .15s, transform .15s var(--ease), filter .15s; }
+.btn:hover { background: rgba(255,255,255,.13); transform: translateY(-1px); }
+.btn.primary, .cta, .hero-go { background: linear-gradient(180deg, #ffd56a, var(--gold) 55%, var(--gold-2)); color: #1a1204; position: relative; overflow: hidden; box-shadow: 0 8px 22px rgba(255,170,40,.32); }
+.btn.primary::after, .cta::after, .hero-go::after { content: ""; position: absolute; top: 0; bottom: 0; left: -60%; width: 40%; background: linear-gradient(100deg, transparent, rgba(255,255,255,.55), transparent); transform: skewX(-20deg); animation: shine 3.2s ease-in-out infinite; }
+@keyframes shine { 0%, 62% { left: -60%; } 100% { left: 130%; } }
+.cta { clip-path: polygon(12px 0, 100% 0, calc(100% - 12px) 100%, 0 100%); border-radius: 4px; font: italic 800 28px/1 var(--display); padding: 15px 40px; }
+.seg button { border-radius: 3px; border-color: var(--edge); font-family: var(--display); font-size: 14px; letter-spacing: .04em; transition: background .15s, color .15s; }
+.seg button:hover { background: rgba(255,255,255,.08); }
+.seg button[aria-pressed="true"] { background: linear-gradient(180deg, #ffffff, #d9e6ee); color: #071320; border-color: transparent; box-shadow: 0 4px 14px rgba(0,0,0,.35); }
+button:focus-visible { outline: 2px solid var(--aqua); outline-offset: 3px; }
+
+/* ---------- Главное меню ---------- */
+.menu { background:
+  linear-gradient(90deg, rgba(3,8,14,.94) 0%, rgba(3,8,14,.78) 34%, rgba(3,8,14,.18) 62%, rgba(3,8,14,0) 78%),
+  radial-gradient(70% 90% at 0% 100%, rgba(52,224,255,.10), transparent 60%),
+  linear-gradient(0deg, rgba(3,8,14,.85), transparent 30%); }
+.home-brand .logo-ball { filter: drop-shadow(0 10px 22px rgba(0,0,0,.6)) drop-shadow(0 0 18px rgba(52,224,255,.25)); }
+.title { font: italic 800 clamp(46px, 7.4vw, 92px)/.86 var(--display); text-transform: uppercase; letter-spacing: -.015em; text-shadow: 0 8px 30px rgba(0,0,0,.5); }
+.title span { -webkit-text-stroke: 0; color: transparent; background: linear-gradient(180deg, #ffe08a, var(--gold) 55%, var(--gold-2)); -webkit-background-clip: text; background-clip: text; font-style: italic; letter-spacing: .01em; }
+.eyebrow { color: var(--aqua); letter-spacing: .22em; }
+.cover > * { animation: railIn .5s var(--ease) both; flex-shrink: 0; }
+.cover > *:nth-child(2) { animation-delay: .06s; } .cover > *:nth-child(3) { animation-delay: .1s; } .cover > *:nth-child(4) { animation-delay: .14s; } .cover > *:nth-child(5) { animation-delay: .18s; }
+@keyframes railIn { from { opacity: 0; transform: translateX(-22px); } }
+/* Карточка матча: половины в цветах команд, скошенный разрез, крупные коды */
+.hero { border-radius: 14px; border: 1px solid rgba(255,255,255,.14); background:
+  linear-gradient(105deg, color-mix(in srgb, var(--hc, #1f4f80) 70%, #050b12) 0%, color-mix(in srgb, var(--hc, #1f4f80) 38%, #050b12) 46%, color-mix(in srgb, var(--ac, #1f4fd1) 38%, #050b12) 54%, color-mix(in srgb, var(--ac, #1f4fd1) 70%, #050b12) 100%);
+  box-shadow: var(--shadow), inset 0 1px 0 rgba(255,255,255,.14); }
+.hero::before { background: linear-gradient(100deg, transparent 0 46%, rgba(255,255,255,.10) 49%, rgba(0,0,0,.25) 51%, transparent 54%); transform: none; top: 0; right: 0; width: 100%; height: 100%; }
+.hero::after { height: 4px; background: linear-gradient(90deg, var(--hc, #fff), var(--gold) 50%, var(--ac, #2a5ae0)); }
+.hero:hover { transform: translateY(-3px); box-shadow: 0 28px 60px rgba(0,0,0,.6), 0 0 0 2px rgba(255,210,110,.45); }
+.hero-tag { color: #fff; opacity: .8; letter-spacing: .24em; }
+.hv-team b { font: italic 800 48px/1 var(--display); text-shadow: 0 4px 18px rgba(0,0,0,.45); }
+.hv-flag { width: 58px; filter: drop-shadow(0 6px 12px rgba(0,0,0,.4)); }
+.hero-vs em { font: italic 800 30px var(--display); color: #fff; opacity: .9; text-shadow: 0 0 18px rgba(255,210,110,.6); }
+.hero-go { border-radius: 4px; clip-path: polygon(10px 0, 100% 0, calc(100% - 10px) 100%, 0 100%); font: italic 800 26px/1 var(--display); padding: 12px 28px; }
+.setup-link { color: var(--aqua); font-family: var(--display); letter-spacing: .06em; text-transform: uppercase; font-size: 13px; }
+/* Режимы — «рельс» крупных пунктов с цветной кромкой и стрелкой */
+.tile { border-radius: 10px; position: relative; overflow: hidden; transition: transform .2s var(--ease), border-color .2s, background .2s; }
+.tile::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: linear-gradient(180deg, var(--aqua), var(--gold)); opacity: 0; transition: opacity .2s; }
+.tile::after { content: "›"; position: absolute; right: 14px; top: 50%; transform: translate(-6px, -50%); font: 800 26px var(--display); color: var(--gold); opacity: 0; transition: opacity .2s, transform .2s var(--ease); }
+.tile:hover { transform: translateX(4px); border-color: var(--edge-hi); background: linear-gradient(90deg, rgba(255,194,58,.10), rgba(255,255,255,0) 60%), var(--glass-hi); }
+.tile:hover::before, .tile:focus-visible::before { opacity: 1; }
+.tile:hover::after, .tile:focus-visible::after { opacity: 1; transform: translate(0, -50%); }
+.tile b { font: italic 800 22px/1.05 var(--display); text-transform: uppercase; letter-spacing: .02em; }
+.tile svg { border-radius: 8px; background: linear-gradient(135deg, rgba(52,224,255,.22), rgba(52,224,255,.05)); }
+.home-foot button { font-family: var(--display); letter-spacing: .06em; text-transform: uppercase; font-size: 12px; }
+@media (min-height: 541px) {
+  .cover { width: min(620px, 100%); padding-left: 56px; }
+  .tiles { grid-template-columns: 1fr; gap: 8px; }
+  .tile { padding: 12px 18px; grid-template-columns: 44px minmax(0, 1fr); }
+  .tile svg { width: 44px; height: 44px; }
+}
+
+/* ---------- Табло трансляции ---------- */
+.sb { background: none; border: 0; box-shadow: none; overflow: visible; gap: 0; filter: drop-shadow(0 10px 24px rgba(0,0,0,.5)); }
+.sb-teams { background: linear-gradient(180deg, rgba(14,26,40,.96), rgba(6,13,22,.96)); clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%); border-radius: 6px 0 0 6px; overflow: hidden; }
+.sb-row { min-height: 32px; grid-template-columns: 6px 24px 50px 34px 12px; }
+.sb-row + .sb-row { border-top: 1px solid rgba(255,255,255,.07); }
+.sb-cap { width: 6px; }
+.sb-cap.home { background: var(--tc0, var(--home)); } .sb-cap.away { background: var(--tc1, var(--away)); }
+.sb-code { font: 800 21px var(--display); letter-spacing: .05em; }
+.sb-score { font: 800 26px var(--display); color: #fff; }
+.sb-mid { background: linear-gradient(180deg, #f4f7fa, #cfdbe4); color: #071320; border: 0; clip-path: polygon(0 0, 100% 0, calc(100% - 10px) 100%, 0 100%); padding: 0 22px 0 14px; min-width: 96px; }
+.sb-per { color: #3b5468; font-weight: 700; }
+.sb-clock { color: #071320; font-size: 30px; }
+.sb-shot { background: linear-gradient(180deg, #2a0d0d, #160606); border: 0; margin-left: -6px; clip-path: polygon(10px 0, 100% 0, calc(100% - 10px) 100%, 0 100%); min-width: 66px; padding: 0 6px; }
+.sb-shot span { font-size: 34px; color: #ffcf4a; text-shadow: 0 0 12px rgba(255,190,60,.45); }
+.sb-shot.low span { color: #ff5a4f; text-shadow: 0 0 12px rgba(255,80,70,.6); animation: blink 1s steps(2) infinite; }
+.icon-btn { border-radius: 8px; background: var(--glass); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border-color: var(--edge); transition: transform .15s, border-color .15s; }
+.icon-btn:hover { transform: translateY(-1px); border-color: var(--edge-hi); }
+#banner .b-title { font: italic 800 34px/1 var(--display); text-transform: uppercase; clip-path: polygon(14px 0, 100% 0, calc(100% - 14px) 100%, 0 100%); border: 0; padding: 10px 30px 9px; background: linear-gradient(180deg, rgba(16,30,46,.96), rgba(6,12,20,.96)); box-shadow: var(--shadow); }
+#banner.goal .b-title { background: linear-gradient(180deg, #ffe08a, var(--gold) 50%, var(--gold-2)); font-size: 54px; padding: 12px 44px; animation: goalPop .5s var(--ease) both; }
+@keyframes goalPop { 0% { transform: scale(.6); opacity: 0; } 60% { transform: scale(1.08); } 100% { transform: scale(1); } }
+#tvcard { border-radius: 8px; border: 0; background: linear-gradient(90deg, rgba(14,26,40,.97), rgba(6,13,22,.95)); box-shadow: var(--shadow); }
+#tvcard .tc-tag { clip-path: polygon(6px 0, 100% 0, calc(100% - 6px) 100%, 0 100%); padding: 2px 12px; }
+#tvcard .tc-name { font-style: italic; text-transform: uppercase; }
+#pcard { border-radius: 10px; }
+#pcard .pc-top b { font-style: italic; }
+#radar { border-radius: 10px; }
+#labels .lb { border-radius: 2px; clip-path: polygon(4px 0, 100% 0, calc(100% - 4px) 100%, 0 100%); padding: 1px 9px; background: rgba(5,11,18,.82); }
+
+/* ---------- Статистика: числа по краям, полоса «кто больше» ---------- */
+.stats { width: 100%; border-collapse: separate; border-spacing: 0 6px; font-variant-numeric: tabular-nums; }
+.stats th { font: italic 800 22px var(--display); letter-spacing: .04em; color: #fff; padding-bottom: 4px; }
+.stats td { padding: 4px 6px; }
+.stats td:first-child, .stats td:last-child { font: 800 20px var(--display); width: 72px; text-align: center; }
+.stats td:nth-child(2) { text-align: center; font-size: 12px; color: var(--muted); letter-spacing: .06em; text-transform: uppercase; }
+.cmp { height: 5px; margin: 5px auto 0; max-width: 260px; border-radius: 3px; background: var(--away, #2a5ae0); overflow: hidden; }
+.cmp i { display: block; height: 100%; background: linear-gradient(90deg, #f3f5f7, #dfe8ee); border-radius: 3px 0 0 3px; transition: width .5s var(--ease); }
+.scoreline { font: italic 800 64px/1 var(--display); letter-spacing: .02em; text-shadow: 0 8px 30px rgba(0,0,0,.5); }
+/* Телефон горизонтально — компактнее */
+@media (max-height: 540px) and (orientation: landscape) {
+  .card { padding: 18px 18px 16px; } .card h2 { font-size: 28px; } .card h2::after { margin-top: 6px; height: 3px; }
+  .btn { padding: 9px 16px; font-size: 13px; } .cta { font-size: 22px; padding: 12px 28px; }
+  .hv-team b { font-size: 32px; } .hv-flag { width: 40px; } .hero-go { font-size: 18px; padding: 8px 18px; }
+  .tile b { font-size: 17px; } .tile::after { display: none; }
+  .stats td:first-child, .stats td:last-child { font-size: 16px; } .stats th { font-size: 18px; } .scoreline { font-size: 44px; }
+}
+@media (prefers-reduced-motion: reduce) { .cover > *, .card, #banner.goal .b-title { animation: none !important; } .btn.primary::after, .cta::after, .hero-go::after { display: none; } }
 </style>
 
 <div id="app">
@@ -706,17 +835,23 @@ body.lefty.tb-large #stick { transform-origin: bottom right; }
   <div id="menu" class="overlay menu" data-view="home">
     <section class="cover" aria-label="Главное меню">
       <header class="home-brand">
-        <svg class="logo-ball" viewBox="0 0 64 64" aria-hidden="true">
+        <svg class="logo-ball" viewBox="0 0 96 96" aria-hidden="true">
           <defs>
-            <radialGradient id="lbG" cx="36%" cy="30%" r="72%"><stop offset="0" stop-color="#fff6c4"/><stop offset=".5" stop-color="#ffc23a"/><stop offset="1" stop-color="#c97800"/></radialGradient>
-            <clipPath id="lbC"><circle cx="32" cy="29" r="21"/></clipPath>
+            <linearGradient id="lbRing" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffe08a"/><stop offset=".5" stop-color="#ffc23a"/><stop offset="1" stop-color="#d97a00"/></linearGradient>
+            <radialGradient id="lbBg" cx="50%" cy="38%" r="70%"><stop offset="0" stop-color="#14365a"/><stop offset="1" stop-color="#050d17"/></radialGradient>
+            <radialGradient id="lbG" cx="38%" cy="30%" r="75%"><stop offset="0" stop-color="#fff7cf"/><stop offset=".55" stop-color="#ffc23a"/><stop offset="1" stop-color="#c26f00"/></radialGradient>
+            <clipPath id="lbC"><circle cx="48" cy="42" r="19"/></clipPath>
+            <path id="lbArc" d="M18 50a30 30 0 0 0 60 0"/>
           </defs>
-          <circle cx="32" cy="29" r="21" fill="url(#lbG)"/>
-          <g clip-path="url(#lbC)" fill="none" stroke="#1f55e0" stroke-width="3.4" stroke-linecap="round"><path d="M9 19c12 7 34 7 46 0"/><path d="M8 36c14 8 34 8 48 0"/><path d="M33 6c-9 9-9 37 0 46"/></g>
-          <path d="M5 55c5-4 9-4 14 0s9 4 14 0 9-4 14 0 8 4 12 1" fill="none" stroke="#3dd6f5" stroke-width="3.2" stroke-linecap="round"/>
+          <circle cx="48" cy="48" r="45" fill="url(#lbBg)" stroke="url(#lbRing)" stroke-width="4"/>
+          <circle cx="48" cy="48" r="38.5" fill="none" stroke="rgba(255,255,255,.14)" stroke-width="1"/>
+          <circle cx="48" cy="42" r="19" fill="url(#lbG)"/>
+          <g clip-path="url(#lbC)" fill="none" stroke="#1846c8" stroke-width="3" stroke-linecap="round"><path d="M27 33c11 6 31 6 42 0"/><path d="M26 49c12 7 32 7 44 0"/><path d="M49 22c-8 8-8 32 0 41"/></g>
+          <path d="M20 66c5-4 9-4 14 0s9 4 14 0 9-4 14 0 9 4 14 0" fill="none" stroke="#34e0ff" stroke-width="3.4" stroke-linecap="round"/>
+          <text font-family="Fira Sans Extra Condensed, Arial Narrow, sans-serif" font-size="8.5" font-weight="800" letter-spacing="2.2" fill="#ffc23a"><textPath href="#lbArc" startOffset="50%" text-anchor="middle">WATER POLO</textPath></text>
         </svg>
         <div>
-          <div class="eyebrow">Водное поло · правила World Aquatics 2025/26</div>
+          <div class="eyebrow">Водное поло · международные правила 2025/26</div>
           <h1 class="title">WATER POLO<span>MOBILE</span></h1>
         </div>
       </header>
@@ -860,21 +995,21 @@ body.lefty.tb-large #stick { transform-origin: bottom right; }
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.min.js"></script>
-<script src="js/data.js?v=1792587130"></script>
-<script src="js/body-model.js?v=1792587130"></script>
-<script src="js/audio.js?v=1792587130"></script>
-<script src="js/world.js?v=1792587130"></script>
-<script src="js/player.js?v=1792587130"></script>
-<script src="js/ball.js?v=1792587130"></script>
-<script src="js/ai.js?v=1792587130"></script>
-<script src="js/match.js?v=1792587130"></script>
-<script src="js/input.js?v=1792587130"></script>
-<script src="js/career.js?v=1792587130"></script>
-<script src="js/cup.js?v=1792587130"></script>
-<script src="js/tutorial.js?v=1792587130"></script>
-<script src="js/firebase-config.js?v=1792587130"></script>
-<script src="js/net.js?v=1792587130"></script>
-<script src="js/ui.js?v=1792587130"></script>
-<script src="js/main.js?v=1792587130"></script>
+<script src="js/data.js?v=1792606240"></script>
+<script src="js/body-model.js?v=1792606240"></script>
+<script src="js/audio.js?v=1792606240"></script>
+<script src="js/world.js?v=1792606240"></script>
+<script src="js/player.js?v=1792606240"></script>
+<script src="js/ball.js?v=1792606240"></script>
+<script src="js/ai.js?v=1792606240"></script>
+<script src="js/match.js?v=1792606240"></script>
+<script src="js/input.js?v=1792606240"></script>
+<script src="js/career.js?v=1792606240"></script>
+<script src="js/cup.js?v=1792606240"></script>
+<script src="js/tutorial.js?v=1792606240"></script>
+<script src="js/firebase-config.js?v=1792606240"></script>
+<script src="js/net.js?v=1792606240"></script>
+<script src="js/ui.js?v=1792606240"></script>
+<script src="js/main.js?v=1792606240"></script>
 
 </body></html>

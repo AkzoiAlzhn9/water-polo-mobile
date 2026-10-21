@@ -578,7 +578,7 @@
         const grd = g.createLinearGradient(0, 0, w, 0); grd.addColorStop(0, '#0d2742'); grd.addColorStop(0.5, '#0b4a74'); grd.addColorStop(1, '#0d2742');
         g.fillStyle = grd; g.fillRect(0, 0, w, h);
         g.font = '700 38px "Fira Sans Extra Condensed", Arial Narrow, sans-serif'; g.fillStyle = '#e8f3ff'; g.textBaseline = 'middle';
-        const items = ['WATER POLO MOBILE', 'WORLD AQUATICS RULES 2025', '28 · 18 · 15', 'ВОДНОЕ ПОЛО'];
+        const items = ['WATER POLO MOBILE', 'FAIR PLAY', '28 · 18 · 15', 'ВОДНОЕ ПОЛО'];
         let x = 20, i = 0; while (x < w) { const t = items[i++ % items.length]; g.fillText(t, x, h / 2 + 2); x += g.measureText(t).width + 70; }
       });
       adTex.wrapS = THREE.RepeatWrapping;
