@@ -98,6 +98,7 @@
       });
       grip.colorSpace = THREE.NoColorSpace;
       this.mesh = new THREE.Mesh(new THREE.SphereGeometry(R.BALL_R, 32, 20), WP.underwaterify(new THREE.MeshPhysicalMaterial({ map: ballTexture(), bumpMap: grip, bumpScale: 0.6, roughness: 0.5, clearcoat: 1, clearcoatRoughness: 0.1 }), 0.7));
+      this.mesh.userData.dyn = true; // не в снимке отражения арены
       world.scene.add(this.mesh);
       this.pos = new THREE.Vector3(0, 0.07, 0);
       this.vel = new THREE.Vector3();

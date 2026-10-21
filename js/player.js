@@ -281,7 +281,7 @@
     // У модели v2 голова — часть кожи: её не раздуваем, полнеет только шея
     const kinds = D.bones.map(name => {
       const s = name.endsWith('L') ? -1 : 1;
-      if (name === 'body') return [0, 0];
+      if (name === 'body' || name === 'chest') return [0, 0];
       if (name === 'neck' || name === 'head') return [1, 0, name === 'head' && D.v === 2 ? 0 : 0.3];
       if (/^(sh|el)/.test(name)) return [2, s, 0, -0.02, s * 0.22, 0, -ca, s * sa, s * 0.22 * k];
       if (/^(hip|kn)/.test(name)) return [2, s, 0, -0.6, s * 0.09, 0, -cl, s * sl, s * 0.09 * k];
@@ -428,6 +428,8 @@
     sfwd: { rs: 2.78, ra: 0.26, re: 0.16, yaw: 0.04, pitch: 0.09 },
   };
   const eio = (u) => u * u * (3 - 2 * u), eout = (u) => 1 - (1 - u) * (1 - u) * (1 - u);
+  // Жёсткость пружин суставов (доля от общей): локти и колени мягче — запаздывают; корпус тяжелее
+  const SPR = { re: 0.72, le: 0.72, hrk: 0.68, hlk: 0.68, hrs: 0.85, hls: 0.85, yaw: 0.8, pitch: 0.8, roll: 0.7, y: 0.9 };
   const PK = Object.keys(PUMP.ready);
   // Фазы: замах (load) → выброс (strike) → остановка с отдачей (hold) → возврат. Для большого и маленького кача — свои доли
   const PT = { big: [0.26, 0.4, 0.55], small: [0.28, 0.52, 0.64] };
@@ -540,10 +542,13 @@
         // Мышцы вылеплены прямо в торсе; трапеция — мягкий скат от шеи к плечам
         add(body, s.ball, mSkin, -0.012, 0.062, 0, 0.05, 0.03, 0.105 * bw);
       }
-      const neck = new THREE.Group(); neck.position.y = 0.09; body.add(neck);
+      // Грудь — отдельный узел (кость chest модели): скручивается и гнётся относительно таза; шея и плечи висят на ней
+      const chestY = sk && WP.BODY.rig && WP.BODY.rig.chest !== undefined ? WP.BODY.rig.chest : -0.3;
+      const chest = new THREE.Group(); chest.position.y = chestY; body.add(chest);
+      const neck = new THREE.Group(); neck.position.y = 0.09 - chestY; chest.add(neck);
       if (!sk) add(neck, s.neck, mSkin, 0, 0.03, 0);
       const headG = new THREE.Group(); headG.position.y = 0.14; headG.scale.setScalar(0.93); neck.add(headG); // голова чуть меньше — плечи кажутся мощнее
-      if (v2) { const R = WP.BODY.rig; neck.position.set(R.neck[0], R.neck[1], 0); headG.position.set(R.head[0], R.head[1], 0); headG.scale.setScalar(1); }
+      if (v2) { const R = WP.BODY.rig; neck.position.set(R.neck[0], R.neck[1] - chestY, 0); headG.position.set(R.head[0], R.head[1], 0); headG.scale.setScalar(1); }
       // Борода или щетина — у части игроков
       const hb = morphRnd(this.team.code + '|' + this.name + '|beard')();
       const mBeard = plainMat(new THREE.Color(skin).lerp(new THREE.Color(HAIR[Math.floor(hb * 10) % HAIR.length]), hb < 0.2 ? 0.8 : 0.5).getHex(), 0.95);
@@ -595,7 +600,7 @@
         strap.rotation.set(0, Math.PI / 2, Math.PI);
       }
       const mkArm = (side) => {
-        const sh = new THREE.Group(); sh.position.set(0, -0.02, side * 0.22 * bw); body.add(sh);
+        const sh = new THREE.Group(); sh.position.set(0, -0.02 - chestY, side * 0.22 * bw); chest.add(sh);
         const el = new THREE.Group(); el.position.y = -0.3; sh.add(el);
         const hand = new THREE.Group(); hand.position.y = -0.265; el.add(hand);
         if (sk) return { sh, el, hand };
@@ -622,8 +627,9 @@
         return { hip, kn, foot };
       };
       const aR = mkArm(1), aL = mkArm(-1), lR = mkLeg(1), lL = mkLeg(-1);
-      this.rig = { root, body, neck, headG, aR, aL, lR, lL };
+      this.rig = { root, body, chest, neck, headG, aR, aL, lR, lL };
       if (sk) this.skinBody(skinBodyMat(skin), mSuit, mBodyParts);
+      root.userData.dyn = true; // не попадает в снимок отражения арены
       this.world.scene.add(root);
       this.j = {
         y: 0.05, pitch: 0.2, roll: 0, yaw: 0,
@@ -636,8 +642,8 @@
     // запоминаются обратные матрицы — дальше кожа просто следует за узлами при любой анимации
     skinBody(mSkin, mSuit, parts) {
       const r = this.rig, D = WP.BODY;
-      const map = { body: r.body, neck: r.neck, head: r.headG, shR: r.aR.sh, elR: r.aR.el, handR: r.aR.hand, shL: r.aL.sh, elL: r.aL.el, handL: r.aL.hand, hipR: r.lR.hip, knR: r.lR.kn, footR: r.lR.foot, hipL: r.lL.hip, knL: r.lL.kn, footL: r.lL.foot };
-      r.body.rotation.set(0, 0, 0); r.body.position.y = 0; r.neck.rotation.set(0, 0, 0);
+      const map = { body: r.body, chest: r.chest, neck: r.neck, head: r.headG, shR: r.aR.sh, elR: r.aR.el, handR: r.aR.hand, shL: r.aL.sh, elL: r.aL.el, handL: r.aL.hand, hipR: r.lR.hip, knR: r.lR.kn, footR: r.lR.foot, hipL: r.lL.hip, knL: r.lL.kn, footL: r.lL.foot };
+      r.body.rotation.set(0, 0, 0); r.body.position.y = 0; r.chest.rotation.set(0, 0, 0); r.neck.rotation.set(0, 0, 0);
       this.setArm(r.aR, 0, D.bind.arm, 0, 1); this.setArm(r.aL, 0, D.bind.arm, 0, -1);
       this.setLeg(r.lR, 0, D.bind.leg, 0, 1); this.setLeg(r.lL, 0, D.bind.leg, 0, -1);
       r.lR.foot.rotation.z = 0; r.lL.foot.rotation.z = 0;
@@ -791,7 +797,7 @@
     // Рука к точке в мире (плечо смотрит на цель, локоть сгибается, если цель ближе вытянутой руки)
     ikArm(arm, target) {
       V1.copy(target);
-      this.rig.body.worldToLocal(V1);
+      arm.sh.parent.worldToLocal(V1); // плечо висит на груди
       V1.sub(arm.sh.position);
       const L = V1.length();
       V1.normalize();
@@ -987,10 +993,18 @@
       if (this.poseOverride) { Object.assign(T, this.poseOverride); fast = true; }
       // Кач и замах сверху идут ровно по позе (без сглаживания) — тогда мяч из логики остаётся в ладони
       const exact = act && act.t > 0.04 && !this.poseOverride && (act.type === 'fake' || (act.type === 'windup' && (!style || style === 'over' || style === 'power')));
-      const sK = exact ? 1 : Math.min(1, dt * (fast ? 30 : 14));
+      // Пружины вместо простого сглаживания: суставы догоняют позу с лёгким перехлёстом и инерцией; локти и колени
+      // мягче плеч и бёдер — запаздывают (хлёст), корпус тяжелее конечностей. Кач и замах сверху — ровно по позе
+      const jv = this.jv || (this.jv = {}), w0 = fast ? 24 : 12, ZT = 0.6;
+      const ns = Math.max(1, Math.ceil(dt * 120)), hs = dt / ns;
       for (const key in T) {
         if (j[key] === undefined) continue;
-        j[key] += (T[key] - j[key]) * sK;
+        if (exact) { j[key] = T[key]; jv[key] = 0; continue; }
+        const w = w0 * (SPR[key] || 1);
+        let v = jv[key] || 0, x = j[key];
+        const tg = T[key];
+        for (let i = 0; i < ns; i++) { v += (w * w * (tg - x) - 2 * ZT * w * v) * hs; x += v * hs; }
+        j[key] = x; jv[key] = v;
       }
       // Волна покачивает тело
       const wh = this.world.waveHeight(this.x, this.z);
@@ -1015,7 +1029,23 @@
         }
       }
       rig.body.rotation.order = 'YXZ';
-      rig.body.rotation.set(roll, j.yaw, -(j.pitch - gF * 0.6));
+      // Торс в два звена: таз берёт треть поворота, грудь — остальное и чуть запаздывает (скручивание с отдачей);
+      // в кроле плечи перекатываются сильнее бёдер; в покое грудь «дышит»
+      const cyT = j.yaw * 0.65;
+      if (exact) { this.cy = cyT; this.cyv = 0; }
+      else {
+        let cy = this.cy === undefined ? cyT : this.cy, cv = this.cyv || 0;
+        const wc = fast ? 16 : 9;
+        for (let i = 0; i < ns; i++) { cv += (wc * wc * (cyT - cy) - 2 * 0.42 * wc * cv) * hs; cy += cv * hs; }
+        this.cy = cy; this.cyv = cv;
+      }
+      const breath = 0.022 * Math.sin(t * 1.6 + this.seed) * (1 - this.swimK);
+      rig.body.rotation.set(roll * 0.65, j.yaw - cyT, -(j.pitch - gF * 0.6));
+      rig.chest.rotation.order = 'YXZ';
+      const sroll = 0.12 * Math.sin(ph) * this.swimK; // в кроле плечи перекатываются сильнее бёдер
+      rig.chest.rotation.set(roll * 0.35 + sroll, this.cy, -breath);
+      // Голова держится ровно (глаза на мяче), пока корпус перекатывается
+      rig.neck.rotation.x = -(roll + sroll) * 0.7;
       rig.neck.rotation.z = j.pitch * (0.85 + 0.12 * this.swimK) + (act && act.type === 'fake' ? act.nod || 0 : 0); // в кроле голова над водой; в каче — кивок
       if (ball) {
         // С мячом смотрит вперёд (на ворота/партнёра), без мяча — следит за мячом

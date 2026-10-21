@@ -29,6 +29,8 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 #app { position: fixed; inset: 0; }
 #stage { position: absolute; inset: 0; }
 #stage canvas { display: block; width: 100%; height: 100%; }
+/* Виньетка — как у ТВ-камеры: края кадра чуть темнее, взгляд в центр */
+#vig { position: absolute; inset: 0; pointer-events: none; z-index: 1; background: radial-gradient(ellipse 75% 70% at 50% 52%, transparent 62%, rgba(0, 4, 10, .32) 100%); }
 
 /* Табло */
 #hud { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
@@ -784,6 +786,7 @@ button:focus-visible { outline: 2px solid var(--aqua); outline-offset: 3px; }
 
 <div id="app">
   <div id="stage"></div>
+  <div id="vig" aria-hidden="true"></div>
   <div id="labels"></div>
 
   <div id="hud" hidden>
@@ -995,21 +998,21 @@ button:focus-visible { outline: 2px solid var(--aqua); outline-offset: 3px; }
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.min.js"></script>
-<script src="js/data.js?v=1792606240"></script>
-<script src="js/body-model.js?v=1792606240"></script>
-<script src="js/audio.js?v=1792606240"></script>
-<script src="js/world.js?v=1792606240"></script>
-<script src="js/player.js?v=1792606240"></script>
-<script src="js/ball.js?v=1792606240"></script>
-<script src="js/ai.js?v=1792606240"></script>
-<script src="js/match.js?v=1792606240"></script>
-<script src="js/input.js?v=1792606240"></script>
-<script src="js/career.js?v=1792606240"></script>
-<script src="js/cup.js?v=1792606240"></script>
-<script src="js/tutorial.js?v=1792606240"></script>
-<script src="js/firebase-config.js?v=1792606240"></script>
-<script src="js/net.js?v=1792606240"></script>
-<script src="js/ui.js?v=1792606240"></script>
-<script src="js/main.js?v=1792606240"></script>
+<script src="js/data.js?v=1792609734"></script>
+<script src="js/body-model.js?v=1792609734"></script>
+<script src="js/audio.js?v=1792609734"></script>
+<script src="js/world.js?v=1792609734"></script>
+<script src="js/player.js?v=1792609734"></script>
+<script src="js/ball.js?v=1792609734"></script>
+<script src="js/ai.js?v=1792609734"></script>
+<script src="js/match.js?v=1792609734"></script>
+<script src="js/input.js?v=1792609734"></script>
+<script src="js/career.js?v=1792609734"></script>
+<script src="js/cup.js?v=1792609734"></script>
+<script src="js/tutorial.js?v=1792609734"></script>
+<script src="js/firebase-config.js?v=1792609734"></script>
+<script src="js/net.js?v=1792609734"></script>
+<script src="js/ui.js?v=1792609734"></script>
+<script src="js/main.js?v=1792609734"></script>
 
 </body></html>

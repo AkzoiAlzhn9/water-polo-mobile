@@ -127,7 +127,14 @@
     }`;
   const WATER_FS = `
     uniform float uTime; uniform vec3 uCam; uniform sampler2D uFoam; uniform sampler2D uFB; uniform vec2 uRes;
+    uniform samplerCube uRefl; uniform float uHasRefl; uniform vec3 uBoxMin; uniform vec3 uBoxMax; uniform vec3 uProbe;
     varying vec3 vW; varying vec3 vN;
+    // Отражение арены из кубической карты с поправкой на объём зала (луч упирается в стены/крышу, а не в бесконечность)
+    vec3 boxDir(vec3 pos, vec3 R) {
+      vec3 t1 = (uBoxMax - pos) / R, t2 = (uBoxMin - pos) / R, tm = max(t1, t2);
+      float d = min(min(tm.x, tm.y), tm.z);
+      return pos + R * d - uProbe;
+    }
     void main(){
       vec2 p = vW.xz;
       vec3 N = vN;
@@ -139,7 +146,14 @@
       float fres = 0.03 + 0.97 * pow(1.0 - ndv, 5.0);
       vec3 Rf = reflect(-V, N);
       vec3 refl = mix(vec3(0.07, 0.10, 0.15), vec3(0.34, 0.40, 0.50), smoothstep(-0.1, 0.9, Rf.y));
-      if (Rf.y > 0.05) {
+      if (uHasRefl > 0.5) {
+        // Для отражения рябь мягче (иначе трибуны дробятся на пёстрые точки), вдали — размытее
+        vec3 Nr = normalize(mix(vN, N, 0.4));
+        vec3 Rr = reflect(-V, Nr);
+        float far = clamp(length(uCam - vW) / 30.0, 0.0, 1.0);
+        vec3 rc = textureCube(uRefl, boxDir(vW, normalize(vec3(Rr.x, max(Rr.y, 0.02), Rr.z))), 1.0 + 2.2 * far).rgb;
+        refl = pow(max(rc, vec3(0.0)), vec3(0.4545)) * 1.08; // карта снята без тон-маппинга — в гамму экрана
+      } else if (Rf.y > 0.05) {
         vec2 c = vW.xz + Rf.xz * ((17.0 - vW.y) / Rf.y);
         float sx = abs(fract(c.x / 7.0) - 0.5);
         float sz = abs(fract(c.y / 9.0) - 0.5);
@@ -222,6 +236,7 @@
       this.buildOfficials();
       this.buildParticles();
       this.buildEnvironment();
+      this.captureReflection();
       this.resize();
       window.addEventListener('resize', () => this.resize());
     }
@@ -341,13 +356,36 @@
       const geo = new THREE.PlaneGeometry(R.POOL_HALF_L * 2, R.POOL_HALF_W * 2, 150, 120);
       geo.rotateX(-Math.PI / 2);
       this.waterMat = new THREE.ShaderMaterial({
-        uniforms: { uTime: { value: 0 }, uRip: { value: this.ripples }, uCam: { value: new THREE.Vector3() }, uFoam: { value: this.foamTex }, uFB: { value: null }, uRes: { value: new THREE.Vector2(1, 1) } },
+        uniforms: { uTime: { value: 0 }, uRip: { value: this.ripples }, uCam: { value: new THREE.Vector3() }, uFoam: { value: this.foamTex }, uFB: { value: null }, uRes: { value: new THREE.Vector2(1, 1) },
+          uRefl: { value: null }, uHasRefl: { value: 0 }, uBoxMin: { value: new THREE.Vector3(-38.5, -0.5, -36.2) }, uBoxMax: { value: new THREE.Vector3(38.5, 22, 39.5) }, uProbe: { value: new THREE.Vector3(0, 1.4, 0) } },
         vertexShader: WATER_VS, fragmentShader: WATER_FS,
       });
       this.water = new THREE.Mesh(geo, this.waterMat);
       this.water.renderOrder = 1;
       this.water.layers.set(1);
       this.scene.add(this.water);
+    }
+
+    // Кубическая карта арены для отражений в воде: снимается при загрузке и после перекраски фан-секторов.
+    // Игроки (userData.dyn) не попадают — их отражение было бы застывшим; вода на слое 1 — камера её не видит
+    captureReflection() {
+      try {
+        if (!this.reflCam) {
+          const rt = new THREE.WebGLCubeRenderTarget(256, { generateMipmaps: true, minFilter: THREE.LinearMipmapLinearFilter });
+          this.reflCam = new THREE.CubeCamera(0.3, 140, rt);
+          this.reflCam.position.copy(this.waterMat.uniforms.uProbe.value);
+          this.scene.add(this.reflCam);
+          this.waterMat.uniforms.uRefl.value = rt.texture;
+        }
+        const hidden = [];
+        for (const o of this.scene.children) if (o.userData && o.userData.dyn && o.visible) { o.visible = false; hidden.push(o); }
+        const fog = this.scene.fog; this.scene.fog = null;
+        this.reflCam.update(this.renderer, this.scene);
+        this.scene.fog = fog;
+        for (const o of hidden) o.visible = true;
+        this.waterMat.uniforms.uHasRefl.value = 1;
+      } catch (e) { this.waterMat.uniforms.uHasRefl.value = 0; }
+      this.reflDirty = false;
     }
 
     waveHeight(x, z) {
@@ -654,6 +692,7 @@
       this.fanSeats[side].forEach((i, k) => b.setColorAt(i, k % 4 === 3 ? alt : c.set(hex)));
       b.instanceColor.needsUpdate = true;
       for (const f of this.banners) if (f.side === side) f.mat.color.set(f.stripe ? 0xffffff : hex);
+      this.reflDirty = true; // фан-сектора перекрашены — переснять отражение
     }
 
     cheer(big) { this.cheerT = big ? 3.5 : 1.5; }
@@ -1051,6 +1090,7 @@
 
     render() {
       const r = this.renderer, cam = this.camera;
+      if (this.reflDirty) this.captureReflection();
       const sz = this._sz || (this._sz = new THREE.Vector2());
       r.getDrawingBufferSize(sz);
       if (!this.fbTex || this.fbTex.image.width !== sz.x || this.fbTex.image.height !== sz.y) {
