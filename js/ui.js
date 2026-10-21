@@ -756,6 +756,17 @@ WP.UI = (function () {
     const ni = m.cfg.net ? WP.Net.info() : null, nt = ni ? (ni.relay ? 'TURN' : ni.p2p ? 'P2P' : 'сервер') + (ni.rtt ? ' · ' + ni.rtt + ' мс' : '') : '';
     $('netPing').hidden = !nt;
     if (nt && $('netPing').textContent !== nt) { $('netPing').textContent = nt; $('netPing').className = ni.rtt > 350 ? 'bad' : ni.rtt > 180 ? 'mid' : ''; }
+    // Панель отладки связи: нажать на плашку; обновляется 2 раза в секунду
+    if (!nt) $('netDbg').hidden = true;
+    else if (!$('netDbg').hidden && performance.now() - (dbgT || 0) > 500) {
+      dbgT = performance.now();
+      const d = WP.Net.debugInfo() || {}, gi = WP.gfxInfo ? WP.gfxInfo() : {}, cl = (v, a, b) => v > b ? 'bad' : v > a ? 'mid' : '';
+      const row = (k, v, c) => '<div>' + k + ': <b' + (c ? ' class="' + c + '"' : '') + '>' + v + '</b></div>';
+      $('netDbg').innerHTML = row('Ты', d.role || '—') + row('Связь', d.mode || '—', d.mode && d.mode.startsWith('сервер') ? 'mid' : '') + row('Пинг', (d.rtt || 0) + ' мс', cl(d.rtt, 180, 350)) +
+        (d.hz !== undefined ? row('Снимков в секунду', d.hz, d.hz < 12 ? 'bad' : d.hz < 20 ? 'mid' : '') + row('Потери', d.loss + ' %', cl(d.loss, 3, 10)) + row('Неровность', d.jit + ' мс', cl(d.jit, 15, 40)) + row('Буфер', d.buf + ' мс') : '') +
+        (d.inHz !== undefined ? row('Ввод соперника', d.inHz + ' в секунду', d.inHz < 10 ? 'bad' : d.inHz < 20 ? 'mid' : '') : '') +
+        row('TURN', d.turn ? 'подключён' : 'нет') + row('Кадров в секунду', (gi.fps || 0) + ' · графика ' + (gi.mode === 'auto' ? 'авто, ступень ' + gi.lvl : gi.mode), cl(60 - (gi.fps || 60), 15, 25));
+    }
     $('hint').hidden = !hint;
     // Пенальти, ты на воротах — короткая подсказка, куда жать
     const rsP = m.restart, gkH = m.state === 'penalty' && rsP && rsP.ready && rsP.team.opp.human === 'p1' && !m.cfg.net;
@@ -841,5 +852,7 @@ WP.UI = (function () {
     g.beginPath(); g.arc(X(b.x), Z(b.z), 6, 0, Math.PI * 2); g.fillStyle = '#ffd21f'; g.fill(); g.strokeStyle = '#1d3f9a'; g.lineWidth = 2; g.stroke();
   }
 
+  let dbgT = 0;
+  document.addEventListener('click', (e) => { if (e.target && e.target.id === 'netPing') { const d = $('netDbg'); d.hidden = !d.hidden; dbgT = 0; } });
   return { init, showMenu, bind, update, showPause, showLineup, setMuteIcon, openHelp, closeHelp, replay, showTactics, showCtl, get ctlOpen() { return !$('ctlset').hidden; }, get gfx() { return cfg.gfx; }, get helpOpen() { return !$('help').hidden; }, get tacOpen() { return !$('tac').hidden; } };
 })();

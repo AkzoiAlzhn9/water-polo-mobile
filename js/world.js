@@ -182,6 +182,12 @@
   class World {
     constructor(container) {
       const r = this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+      // Телефону не хватило видеопамяти (так на iPhone выглядит «вылет»): запоминаем — дальше графика попроще — и перезапускаемся
+      r.domElement.addEventListener('webglcontextlost', (e) => {
+        e.preventDefault();
+        try { localStorage.setItem('polo25_gfxLvl', '5'); localStorage.setItem('polo25_gfxLost', String(Date.now())); } catch (x) { /* нет хранилища */ }
+        if (WP.onGfxLost) WP.onGfxLost();
+      });
       r.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
       r.outputColorSpace = THREE.SRGBColorSpace;
       r.toneMapping = THREE.ACESFilmicToneMapping;
@@ -614,7 +620,7 @@
       const seatMesh = new THREE.InstancedMesh(seatGeo, new THREE.MeshStandardMaterial({ roughness: 0.6 }), seats.length);
       const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), one = new THREE.Vector3(1, 1, 1), c = new THREE.Color(), up = new THREE.Vector3(0, 1, 0);
       seats.forEach((st, i) => { q.setFromAxisAngle(up, st.ry); m4.compose(st.p, q, one); seatMesh.setMatrixAt(i, m4); seatMesh.setColorAt(i, c.set(st.col)); });
-      s.add(seatMesh);
+      s.add(seatMesh); this.seatMesh = seatMesh;
       const people = peopleLo.concat(peopleUp);
       this.spectators = people; this.nLowerCrowd = peopleLo.length; this.fanSeats = fans; this.banners = banners;
       people.forEach((p, i) => { if (p.fan >= 0) fans[p.fan].push(i); });
@@ -1029,11 +1035,14 @@
     }
 
     // Качество: разрешение рендера и частота обновления трибун (на слабых телефонах)
-    setQuality(pr, low) {
+    // crowd: 2 — все зрители, 1 — только нижний ярус (верхний почти не виден с камеры трансляции), 0 — трибуны без людей;
+    // seats — рисовать ли пустые кресла
+    setQuality(pr, low, crowd, seats) {
       this.renderer.setPixelRatio(pr);
       this.lowGfx = !!low;
-      // Слабый телефон: зрители верхнего яруса не рисуются (они почти не видны с камеры трансляции)
-      if (this.crowd) { const n = this.lowGfx ? this.nLowerCrowd : this.crowd.seats.length; this.crowd.bodies.count = n; this.crowd.heads.count = n; }
+      if (crowd === undefined) crowd = low ? 1 : 2;
+      if (this.crowd) { const n = crowd >= 2 ? this.crowd.seats.length : crowd === 1 ? this.nLowerCrowd : 0; this.crowd.bodies.count = n; this.crowd.heads.count = n; this.crowd.bodies.visible = this.crowd.heads.visible = n > 0; }
+      if (this.seatMesh) this.seatMesh.visible = seats !== false;
       this.resize();
     }
 

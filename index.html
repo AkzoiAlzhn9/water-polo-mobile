@@ -473,7 +473,10 @@ body.lefty .tbtns .tdrive { left: auto; right: 0; }
 .on-badge { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 10px; background: #35c46a; color: #04210f; font: 700 11px var(--display); letter-spacing: .02em; vertical-align: 2px; }
 .on-dot { width: 10px; height: 10px; border-radius: 50%; background: #35c46a; box-shadow: 0 0 0 3px rgba(53,196,106,.25); flex: none; }
 #online .btn.big { font-size: 18px; padding: 14px 28px; width: 100%; max-width: 340px; }
-#netPing { position: absolute; left: calc(12px + env(safe-area-inset-left, 0px)); top: calc(84px + env(safe-area-inset-top, 0px)); background: rgba(6,20,32,.72); color: #9ff0b8; padding: 2px 8px; border-radius: 4px; font: 700 11px var(--display); letter-spacing: .04em; pointer-events: none; }
+#netPing { position: absolute; left: calc(12px + env(safe-area-inset-left, 0px)); top: calc(84px + env(safe-area-inset-top, 0px)); background: rgba(6,20,32,.72); color: #9ff0b8; padding: 2px 8px; border-radius: 4px; font: 700 11px var(--display); letter-spacing: .04em; pointer-events: auto; cursor: pointer; }
+#netDbg { position: absolute; left: calc(12px + env(safe-area-inset-left, 0px)); top: calc(106px + env(safe-area-inset-top, 0px)); background: rgba(6,20,32,.9); color: #dfeefa; padding: 8px 10px; border-radius: 6px; font: 600 12px/1.45 var(--display); letter-spacing: .02em; z-index: 4; min-width: 190px; }
+#netDbg b { color: #9ff0b8; font-weight: 700; }
+#netDbg .bad { color: #ff9a9a; } #netDbg .mid { color: #ffd97a; }
 #netPing.mid { color: #ffd97a; }
 #netPing.bad { color: #ff9a9a; }
 #netPill { position: absolute; left: 50%; top: calc(70px + env(safe-area-inset-top, 0px)); transform: translateX(-50%); background: rgba(58,12,14,.9); border: 1px solid var(--red); color: #ffe3e3; padding: 6px 14px; border-radius: 6px; font: 700 14px var(--display); letter-spacing: .04em; pointer-events: none; white-space: nowrap; }
@@ -662,7 +665,8 @@ body.lefty.tb-large #stick { transform-origin: bottom right; }
     <div id="power"><i></i><u hidden></u></div>
     <div id="tut" hidden></div>
     <div id="netPill" hidden></div>
-    <div id="netPing" hidden></div>
+    <div id="netPing" hidden title="Подробно о связи"></div>
+    <div id="netDbg" hidden></div>
     <div id="pcard" hidden><div class="pc-top"></div><div class="pc-at"></div><div class="pc-st" title="Запас сил"><i></i></div></div>
     <div id="hint"></div>
     <div id="penHint" hidden></div>
@@ -837,20 +841,20 @@ body.lefty.tb-large #stick { transform-origin: bottom right; }
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.min.js"></script>
-<script src="js/data.js?v=1792528034"></script>
-<script src="js/body-model.js?v=1792528034"></script>
-<script src="js/audio.js?v=1792528034"></script>
-<script src="js/world.js?v=1792528034"></script>
-<script src="js/player.js?v=1792528034"></script>
-<script src="js/ball.js?v=1792528034"></script>
-<script src="js/ai.js?v=1792528034"></script>
-<script src="js/match.js?v=1792528034"></script>
-<script src="js/input.js?v=1792528034"></script>
-<script src="js/career.js?v=1792528034"></script>
-<script src="js/tutorial.js?v=1792528034"></script>
-<script src="js/firebase-config.js?v=1792528034"></script>
-<script src="js/net.js?v=1792528034"></script>
-<script src="js/ui.js?v=1792528034"></script>
-<script src="js/main.js?v=1792528034"></script>
+<script src="js/data.js?v=1792586393"></script>
+<script src="js/body-model.js?v=1792586393"></script>
+<script src="js/audio.js?v=1792586393"></script>
+<script src="js/world.js?v=1792586393"></script>
+<script src="js/player.js?v=1792586393"></script>
+<script src="js/ball.js?v=1792586393"></script>
+<script src="js/ai.js?v=1792586393"></script>
+<script src="js/match.js?v=1792586393"></script>
+<script src="js/input.js?v=1792586393"></script>
+<script src="js/career.js?v=1792586393"></script>
+<script src="js/tutorial.js?v=1792586393"></script>
+<script src="js/firebase-config.js?v=1792586393"></script>
+<script src="js/net.js?v=1792586393"></script>
+<script src="js/ui.js?v=1792586393"></script>
+<script src="js/main.js?v=1792586393"></script>
 
 </body></html>

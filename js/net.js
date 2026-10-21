@@ -450,7 +450,7 @@ WP.Net = (function () {
     const g = game.room.peers().find(p => p.peer === game.guestPeer);
     // Ввод гостя идёт двумя путями — напрямую (P2P) и через сервер; берём самый свежий по номеру
     const now = performance.now();
-    for (const c of [g && g.presence && g.presence.i, game.dcIn]) if (c && Array.isArray(c.c) && (+c.n || 0) >= game.inN) { if ((+c.n || 0) > game.inN || !game.cur) game.curAt = now; game.cur = c; game.inN = +c.n || 0; }
+    for (const c of [g && g.presence && g.presence.i, game.dcIn]) if (c && Array.isArray(c.c) && (+c.n || 0) >= game.inN) { if ((+c.n || 0) > game.inN || !game.cur) { if (game.curAt) game.inIvl = game.inIvl ? game.inIvl * 0.9 + Math.min(1000, now - game.curAt) * 0.1 : now - game.curAt; game.curAt = now; } game.cur = c; game.inN = +c.n || 0; }
     const i = game.cur;
     if (!i) return null;
     // Ввод гостя замолчал (свернул игру, пропала связь) — его пловец не плывёт дальше по последнему нажатию
@@ -532,6 +532,9 @@ WP.Net = (function () {
   function takeSnap(s) {
     if (!(s.q > game.seq)) return;
     const now = performance.now();
+    // Потери: номера снимков идут подряд — пропуски значит не дошли (прямой канал без повторов)
+    if (game.seq > 0) game.lost = (game.lost || 0) + Math.min(50, s.q - game.seq - 1);
+    game.got = (game.got || 0) + 1;
     game.seq = s.q; game.buf.push({ at: now, s }); if (game.buf.length > 10) game.buf.shift();
     // Как часто и как ровно приходят снимки — от этого зависит, насколько можно сократить задержку картинки
     if (game.lastArr) { const iv = Math.min(500, now - game.lastArr); game.ivl = game.ivl ? game.ivl * 0.9 + iv * 0.1 : iv; game.jit = game.jit !== undefined ? game.jit * 0.9 + Math.abs(iv - game.ivl) * 0.1 : 10; }
@@ -698,6 +701,16 @@ WP.Net = (function () {
   function info() {
     if (!game || game.phase !== 'play') return null;
     return { p2p: !!dcOpen(), relay: !!(dcOpen() && game.relay), rtt: Math.round(game.rtt || 0) };
+  }
+  // Подробно для панели отладки связи (нажать на плашку P2P/TURN/сервер в матче)
+  function debugInfo() {
+    if (!game) return null;
+    const g = game, d = { role: g.role === 'host' ? 'хозяин' : 'гость', mode: dcOpen() ? (g.relay ? 'TURN (ретранслятор)' : 'P2P (напрямую)') : 'сервер Firebase', rtt: Math.round(g.rtt || 0), turn: !!(WP.TURN && (WP.TURN.pass || WP.TURN.url)) };
+    if (g.role === 'guest') {
+      const tot = (g.got || 0) + (g.lost || 0);
+      Object.assign(d, { hz: g.ivl ? Math.round(1000 / g.ivl) : 0, jit: Math.round(g.jit || 0), buf: Math.round(g.delay || 0), loss: tot ? Math.round(100 * (g.lost || 0) / tot) : 0 });
+    } else d.inHz = g.inIvl ? Math.round(1000 / g.inIvl) : 0;
+    return d;
   }
   function collectInput(m, inp) {
     CNT.forEach((k, j) => { if (inp[k]) game.cnt[j]++; });
@@ -1100,7 +1113,7 @@ WP.Net = (function () {
   }
 
   return {
-    init, openLobby, closeLobby, bindUi, leave, attachHost, attachGuest, hostInput, hostFrame, guestFrame, status, info, hostWaiting, start, setStatus,
+    init, openLobby, closeLobby, bindUi, leave, attachHost, attachGuest, hostInput, hostFrame, guestFrame, status, info, debugInfo, hostWaiting, start, setStatus,
     setHooks(h) { hooks = h; },
     get role() { return game ? game.role : null; },
     get phase() { return game ? game.phase : null; },

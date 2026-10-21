@@ -147,24 +147,47 @@
     WP.Tutorial.start(match, { touch: !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches), onExit: startDemo });
   }
 
-  // ---------- качество графики: «авто» подстраивает разрешение под частоту кадров ----------
-  let gfxMode = 'auto', pr = 1, prMax = 1, fpsAvg = 60, fpsT = 0;
+  // ---------- качество графики: «авто» спускается по лестнице, пока игра не пойдёт плавно, и запоминает ступень ----------
+  // Ступень: [разрешение (доля от экрана), зрители 2/1/0, пустые кресла]. Тяжелее всего телефону — пиксели и тысячи зрителей.
+  const LVL = (m) => [[m, 2, true], [Math.min(m, 1.5), 2, true], [Math.min(m, 1.25), 1, true], [Math.min(m, 1), 1, true], [Math.min(m, 0.85), 1, false], [Math.min(m, 0.7), 0, false]];
+  const lsGet = (k) => { try { return localStorage.getItem(k); } catch (e) { return null; } };
+  const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch (e) { /* нет хранилища */ } };
+  const touchDev = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+  let gfxMode = 'auto', pr = 1, prMax = 1, fpsAvg = 60, fpsT = 0, lvl = 0, goodT = 0;
+  function applyLvl() {
+    const L = LVL(prMax)[lvl];
+    pr = L[0];
+    if (world) world.setQuality(pr, lvl >= 2, L[1], L[2]);
+  }
   function setGfx(mode) {
     gfxMode = mode || 'auto';
     prMax = Math.min(window.devicePixelRatio || 1, 2);
-    pr = gfxMode === 'low' ? Math.min(prMax, 0.85) : prMax;
-    if (world) world.setQuality(pr, gfxMode === 'low');
+    const saved = parseInt(lsGet('polo25_gfxLvl'), 10);
+    lvl = gfxMode === 'high' ? 0 : gfxMode === 'low' ? 4 : (saved >= 0 && saved <= 5 ? saved : touchDev ? 2 : 0);
+    fpsT = 0; goodT = 0; fpsAvg = 60;
+    applyLvl();
   }
   function autoQuality(dt) {
     if (gfxMode !== 'auto' || dt > 0.2 || document.hidden) return;
     fpsAvg += (1 / Math.max(dt, 1e-3) - fpsAvg) * 0.05;
     fpsT += dt;
     if (fpsT < 2.5) return;
-    let np = pr;
-    if (fpsAvg < 42 && pr > 0.7) np = Math.max(0.7, pr - 0.25);
-    else if (fpsAvg > 57 && pr < prMax) np = Math.min(prMax, pr + 0.25);
-    if (np !== pr) { pr = np; world.setQuality(pr, pr < 1); fpsT = 0; } else fpsT = 1.5;
+    fpsT = 1.5;
+    // Тормозит — ступенью ниже сразу; плавно 12 с подряд — пробуем ступенью выше (после вылета графики — не выше 3-й)
+    if (fpsAvg < 42 && lvl < 5) { lvl++; goodT = 0; fpsT = 0; applyLvl(); lsSet('polo25_gfxLvl', String(lvl)); return; }
+    if (fpsAvg > 57) goodT += 1; else goodT = 0;
+    const lost = +(lsGet('polo25_gfxLost') || 0), floor = Date.now() - lost < 7 * 864e5 ? 3 : 0;
+    if (goodT >= 12 && lvl > floor) { lvl--; goodT = 0; fpsT = 0; applyLvl(); lsSet('polo25_gfxLvl', String(lvl)); }
   }
+  // Видеопамять кончилась: чёрный экран вместо игры — перезапускаем страницу на самой лёгкой графике
+  WP.onGfxLost = () => {
+    const d = document.createElement('div');
+    d.style.cssText = 'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#06121c;color:#fff;font:600 16px system-ui;z-index:99;text-align:center;padding:24px';
+    d.textContent = 'Телефону не хватило видеопамяти — перезапускаем игру с облегчённой графикой…';
+    document.body.appendChild(d);
+    setTimeout(() => location.reload(), 1500);
+  };
+  WP.gfxInfo = () => ({ mode: gfxMode, lvl, pr, fps: Math.round(fpsAvg) });
 
   function startDemo() {
     if (WP.Tutorial.active) WP.Tutorial.stop();
