@@ -218,6 +218,60 @@
   }
   // Телосложение bw: торс шире, плечи и бёдра расходятся, руки и ноги толще вокруг своей оси (смешивание по весам костей)
   const BGC = {};
+  // Разные лица и фигуры из одной модели: плавные деформации (морфы), считаются один раз при загрузке.
+  // Лицо — в осях головы по ориентирам модели (подбородок, низ челюсти); тело — вздутие по нормали (мышечная масса).
+  // 0 челюсть шире/квадратнее, 1 нос крупнее, 2 надбровье тяжелее, 3 щёки полнее, 4 лицо длиннее, 5 тело массивнее
+  let MORPH = null;
+  function bodyMorphs() {
+    if (MORPH) return MORPH;
+    const B = bodyData(), D = WP.BODY, n = D.count, P = B.pos, N = B.nrm, R = D.rig;
+    const hx0 = R.neck[0] + R.head[0], hy0 = R.neck[1] + R.head[1];
+    const chinY = D.chin[0], chinX = D.chin[1], jawY = D.jaw_y, ye = chinY + 0.108;
+    const cl = (v) => v < 0 ? 0 : v > 1 ? 1 : v, ss = (a, b, v) => { const t = cl((v - a) / (b - a)); return t * t * (3 - 2 * t); };
+    const ga = (v, w) => Math.exp(-(v / w) * (v / w));
+    const T = [0, 1, 2, 3, 4, 5].map(() => new Float32Array(n * 3));
+    for (let i = 0; i < n; i++) {
+      const px = P[i * 3], py = P[i * 3 + 1], pz = P[i * 3 + 2], x = px - hx0, y = py - hy0, z = pz, i3 = i * 3;
+      if (y > -0.2) {
+        const front = ss(-0.05, 0.02, x);
+        // Челюсть: низ лица шире, подбородок вперёд
+        let w = ss(ye - 0.01, ye - 0.07, y) * ss(jawY - 0.035, jawY - 0.005, y) * ss(-0.05, 0.0, x);
+        const ch = ga(y - chinY, 0.025) * ga(z, 0.035) * ss(chinX - 0.06, chinX - 0.01, x);
+        T[0][i3] = 0.008 * ch; T[0][i3 + 1] = -0.006 * w; T[0][i3 + 2] = z * 0.24 * w;
+        // Нос: длиннее и шире
+        w = ga(y - (ye - 0.035), 0.022) * ga(z, 0.018) * ss(0.09, 0.13, x);
+        T[1][i3] = 0.013 * w; T[1][i3 + 1] = -0.004 * w; T[1][i3 + 2] = z * 0.35 * w;
+        // Надбровные дуги
+        w = ga(y - (ye + 0.018), 0.012) * ga(z, 0.06) * ss(0.07, 0.11, x);
+        T[2][i3] = 0.007 * w; T[2][i3 + 1] = 0.0015 * w;
+        // Щёки
+        w = ga(y - (ye - 0.04), 0.03) * ga(Math.abs(z) - 0.05, 0.025) * ss(-0.02, 0.05, x);
+        T[3][i3] = 0.003 * w; T[3][i3 + 2] = Math.sign(z) * 0.01 * w;
+        // Лицо длиннее: всё ниже глаз чуть опускается, к шее сходит на нет
+        w = ss(ye + 0.01, ye - 0.02, y) * ss(jawY - 0.045, jawY - 0.01, y) * ss(-0.06, 0.0, x) * front;
+        T[4][i3 + 1] = (y - ye) * 0.14 * w;
+      }
+      // Тело: торс, руки до кистей, бёдра — вздутие по нормали
+      const wb = ss(0.14, 0.04, py) * (1 - ss(0.4, 0.47, Math.abs(pz))) * ss(-1.05, -0.8, py);
+      if (wb > 0) { const k = 0.016 * wb / 127; T[5][i3] = N[i3] * k; T[5][i3 + 1] = N[i3 + 1] * k; T[5][i3 + 2] = N[i3 + 2] * k; }
+    }
+    return (MORPH = T.map(a => new THREE.BufferAttribute(a, 3)));
+  }
+  // Независимые псевдослучайные числа от строки (mulberry32 после FNV-хеша): у WP.hash похожие строки дают похожие значения
+  function morphRnd(str) {
+    let a = 2166136261 >>> 0;
+    for (let i = 0; i < str.length; i++) { a ^= str.charCodeAt(i); a = Math.imul(a, 16777619) >>> 0; }
+    return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  }
+  // Свой набор черт у каждого игрока — по имени, всегда одинаковый
+  function morphMix(p) {
+    // Независимые числа от имени (mulberry32): у WP.hash похожие строки дают похожие значения
+    const rnd = morphRnd(p.team.code + '|' + p.name);
+    const v = [rnd(), rnd(), rnd(), rnd(), rnd(), rnd()], h = (k) => v[k];
+    const role = { CF: 0.35, CB: 0.2, GK: 0.1, W: -0.2, D: 0 }[p.role] || 0;
+    return [h(0) * 1.7 - 0.7, h(1) * 1.6 - 0.6, h(2) * 1.5 - 0.5, h(3) * 1.6 - 0.6, h(4) * 1.4 - 0.6, Math.max(-0.6, Math.min(1, h(5) * 1.2 - 0.4 + role))];
+  }
+
   function bodySkinGeo(bw) {
     const key = bw.toFixed(2);
     if (BGC[key]) return BGC[key];
@@ -263,6 +317,7 @@
     g.setAttribute('skinWeight', new THREE.BufferAttribute(B.jw, 4, true));
     g.setIndex(new THREE.BufferAttribute(B.idx, 1));
     for (const [st, c, m] of D.groups) g.addGroup(st, c, m);
+    if (D.v === 2) { g.morphAttributes.position = bodyMorphs(); g.morphTargetsRelative = true; }
     return (BGC[key] = g);
   }
 
@@ -318,6 +373,11 @@
   }
   let HID = null;
   const HIDDEN = () => HID || (HID = new THREE.MeshBasicMaterial({ visible: false }));
+  // Щетина: та же оболочка бороды, но полупрозрачная — кожа проглядывает
+  function stubbleMat(hex) {
+    const k = 'stb' + hex;
+    return MC[k] || (MC[k] = new THREE.MeshStandardMaterial({ color: hex, roughness: 1, transparent: true, opacity: 0.42, depthWrite: false }));
+  }
   function plainMat(hex, rough) {
     const k = 'p' + hex + rough;
     return MC[k] || (MC[k] = new THREE.MeshStandardMaterial({ color: hex, roughness: rough }));
@@ -454,7 +514,10 @@
       const team = this.team;
       const capHex = this.isGK ? '#d7262e' : team.capHex;
       const numHex = this.isGK ? '#ffffff' : team.numHex;
-      const skin = SKINS[Math.floor(WP.hash(this.name + 'skin') * SKINS.length)];
+      // Тон кожи — от страны (у сборных Европы и Казахстана в основном светлые и средние) и от имени, независимым генератором
+      const sr = morphRnd(this.team.code + '|' + this.name + '|skin');
+      const SK = { USA: [0, 1, 2, 3, 4, 5, 6], AUS: [0, 1, 2, 3, 4], FRA: [0, 1, 2, 3, 5, 6], JPN: [1, 2, 3], ESP: [1, 2, 3], ITA: [0, 1, 2, 3], GRE: [1, 2, 3], MNE: [0, 1, 2], SRB: [0, 1, 2], CRO: [0, 1, 2], HUN: [0, 1, 2], ROU: [0, 1, 2], KAZ: [1, 2, 3], AS1: [1, 2, 3], AS2: [1, 2, 3] }[this.team.code] || [0, 1, 2, 3, 4, 5, 6];
+      const skin = SKINS[SK[Math.floor(sr() * SK.length)]];
       const mSkin = skinMat(skin);
       const mSuit = suitMat(team);
       // Шапочка и наушники несут номер — у каждого свои
@@ -482,13 +545,17 @@
       const headG = new THREE.Group(); headG.position.y = 0.14; headG.scale.setScalar(0.93); neck.add(headG); // голова чуть меньше — плечи кажутся мощнее
       if (v2) { const R = WP.BODY.rig; neck.position.set(R.neck[0], R.neck[1], 0); headG.position.set(R.head[0], R.head[1], 0); headG.scale.setScalar(1); }
       // Борода или щетина — у части игроков
-      const hb = WP.hash(this.name + 'beard');
+      const hb = morphRnd(this.team.code + '|' + this.name + '|beard')();
       const mBeard = plainMat(new THREE.Color(skin).lerp(new THREE.Color(HAIR[Math.floor(hb * 10) % HAIR.length]), hb < 0.2 ? 0.8 : 0.5).getHex(), 0.95);
       let mBodyParts = null;
       if (v2) {
         // Шапочка, борода, брови и глаза — группы той же кожи; без бороды её группа просто не рисуется
         mCap.map.wrapS = THREE.RepeatWrapping;
-        mBodyParts = [mCap, hb < 0.4 ? mBeard : HIDDEN(), mBrow, plainMat(0xe4ddd2, 0.2), plainMat(0x2a1c14, 0.15)];
+        // Борода у ~20%, щетина ещё у ~25%; глаза — карие, тёмные, серо-голубые, зелёные, ореховые
+        const IRIS = [0x2a1c14, 0x3b2616, 0x16110d, 0x46617d, 0x4d6440, 0x6a4a28];
+        const iris = IRIS[Math.floor(morphRnd(this.name + '|eye')() * IRIS.length)];
+        const beardM = hb < 0.2 ? mBeard : hb < 0.45 ? stubbleMat(new THREE.Color(mBeard.color).multiplyScalar(0.7).getHex()) : HIDDEN();
+        mBodyParts = [mCap, beardM, mBrow, plainMat(0xe4ddd2, 0.2), plainMat(iris, 0.15)];
       } else if (sk && WP.BODY.head) {
         const HM = headModel();
         add(headG, HM.skin, skinHeadMat(skin));
@@ -575,6 +642,7 @@
       this.setLeg(r.lR, 0, D.bind.leg, 0, 1); this.setLeg(r.lL, 0, D.bind.leg, 0, -1);
       r.lR.foot.rotation.z = 0; r.lL.foot.rotation.z = 0;
       const mesh = new THREE.SkinnedMesh(bodySkinGeo(this.bw), [mSkin, mSuit].concat(parts || []));
+      if (mesh.morphTargetInfluences) { const mm = morphMix(this); for (let i = 0; i < mm.length; i++) mesh.morphTargetInfluences[i] = mm[i]; }
       r.body.add(mesh);
       r.root.updateMatrixWorld(true);
       mesh.bind(new THREE.Skeleton(D.bones.map(n => map[n])), mesh.matrixWorld);
