@@ -63,14 +63,17 @@
     }
     void main(){
       vec2 p = uMode == 0 ? vW.xz : (uMode == 1 ? vec2(vW.x, vW.y) : vec2(vW.z, vW.y));
+      // Сглаживание по экранной производной: швы плитки и линии чёткие вблизи и не рябят вдали
       vec2 g = abs(fract(p / 0.25) - 0.5);
-      float grout = smoothstep(0.455, 0.5, max(g.x, g.y));
+      vec2 fw = fwidth(p / 0.25);
+      float grout = max(smoothstep(0.5 - 0.045 - fw.x, 0.5 - 0.045 + fw.x, g.x), smoothstep(0.5 - 0.045 - fw.y, 0.5 - 0.045 + fw.y, g.y)) * (1.0 - smoothstep(0.15, 0.5, max(fw.x, fw.y)));
       vec3 tile = vec3(0.60, 0.84, 0.90);
       tile = mix(tile, vec3(0.40, 0.60, 0.68), grout * 0.7);
       if (uMode == 0) {
         float lz = abs(mod(vW.z + 1.25, 2.5) - 1.25);
-        float inLane = step(lz, 0.13) * step(abs(vW.x), 12.6) * step(abs(vW.z), 10.1);
-        float tbar = step(abs(abs(vW.x) - 12.6), 0.13) * step(lz, 0.5) * step(abs(vW.z), 10.1);
+        float aw = max(fwidth(vW.z), fwidth(vW.x)) * 0.8;
+        float inLane = (1.0 - smoothstep(0.13 - aw, 0.13 + aw, lz)) * (1.0 - smoothstep(12.6 - aw, 12.6 + aw, abs(vW.x))) * step(abs(vW.z), 10.1);
+        float tbar = (1.0 - smoothstep(0.13 - aw, 0.13 + aw, abs(abs(vW.x) - 12.6))) * (1.0 - smoothstep(0.5 - aw, 0.5 + aw, lz)) * step(abs(vW.z), 10.1);
         tile = mix(tile, vec3(0.08, 0.13, 0.24), max(inLane, tbar));
       }
       if (uMode != 0 && vW.y > -0.35) tile = mix(tile, vec3(0.12, 0.22, 0.40), 0.85);
@@ -403,25 +406,32 @@
 
     buildLines() {
       const s = this.scene;
-      // Плавучие разделительные дорожки по бокам поля
-      const step = 0.11, n = Math.round(R.HALF_L * 2 / step) + 1;
-      const geo = new THREE.CylinderGeometry(0.06, 0.06, 0.1, 10); geo.rotateZ(Math.PI / 2);
-      const mat = new THREE.MeshStandardMaterial({ roughness: 0.5 });
-      const inst = new THREE.InstancedMesh(geo, mat, n * 2);
-      const m4 = new THREE.Matrix4(), col = new THREE.Color();
+      // Плавучие разделительные дорожки-«волногасители»: диски с рёбрами на тросе, как на соревнованиях. По бокам поля
+      // цвет по зонам — красный до 2 м, жёлтый до 5 м, зелёный до 6 м, белый в середине; за воротами — поперечные
+      const prof = [[0.012, -0.056], [0.05, -0.052], [0.074, -0.04], [0.058, -0.024], [0.078, -0.01], [0.078, 0.01], [0.058, 0.024], [0.074, 0.04], [0.05, 0.052], [0.012, 0.056]];
+      const geo = new THREE.LatheGeometry(prof.map(q => new THREE.Vector2(q[0], q[1])), 12);
+      const step = 0.115, nSide = Math.round(R.HALF_L * 2 / step) + 1, endX = R.HALF_L + 1.55, nEnd = Math.round(R.HALF_W * 2 / step) + 1;
+      const mat = WP.underwaterify(new THREE.MeshStandardMaterial({ roughness: 0.35, metalness: 0.05 }), 0.6);
+      const inst = new THREE.InstancedMesh(geo, mat, nSide * 2 + nEnd * 2);
+      const m4 = new THREE.Matrix4(), col = new THREE.Color(), q = new THREE.Quaternion(), one = new THREE.Vector3(1, 1, 1), pos = new THREE.Vector3();
+      const alongX = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI / 2), alongZ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);
       let k = 0;
-      for (const zz of [-R.HALF_W, R.HALF_W]) {
-        for (let i = 0; i < n; i++) {
-          const x = -R.HALF_L + i * step;
-          const dx = R.HALF_L - Math.abs(x);
-          m4.makeTranslation(x, 0.02, zz);
-          inst.setMatrixAt(k, m4);
-          col.set(dx < 2 ? 0xd62828 : dx < 5 ? 0xf2c400 : dx < 6 ? 0x2a9d4a : 0xf3f3f3);
-          inst.setColorAt(k, col);
-          k++;
-        }
+      for (const zz of [-R.HALF_W, R.HALF_W]) for (let i = 0; i < nSide; i++) {
+        const x = -R.HALF_L + i * step, dx = R.HALF_L - Math.abs(x);
+        q.copy(alongX).multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), i * 0.7));
+        m4.compose(pos.set(x, 0.015, zz), q, one); inst.setMatrixAt(k, m4);
+        inst.setColorAt(k, col.set(dx < 2 ? 0xd62828 : dx < 5 ? 0xf2c400 : dx < 6 ? 0x2a9d4a : (i % 10 < 2 ? 0x1d4fb8 : 0xf3f3f3))); k++;
+      }
+      for (const xx of [-endX, endX]) for (let i = 0; i < nEnd; i++) {
+        const z = -R.HALF_W + i * step;
+        q.copy(alongZ).multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), i * 0.7));
+        m4.compose(pos.set(xx, 0.015, z), q, one); inst.setMatrixAt(k, m4);
+        inst.setColorAt(k, col.set(i % 10 < 2 ? 0xd62828 : 0xf3f3f3)); k++;
       }
       s.add(inst);
+      // Трос под дисками
+      const cable = new THREE.MeshStandardMaterial({ color: 0x2b3440, roughness: 0.6 });
+      for (const zz of [-R.HALF_W, R.HALF_W]) { const c = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, R.HALF_L * 2 + 3.2, 6), cable); c.rotation.z = Math.PI / 2; c.position.set(0, 0.015, zz); s.add(c); }
       // Боковые знаки на бортике
       const marks = [[R.HALF_L, 0xffffff], [R.HALF_L - 2, 0xd62828], [R.HALF_L - 5, 0xf2c400], [R.HALF_L - 6, 0x2a9d4a], [0, 0xffffff]];
       const bgeo = new THREE.BoxGeometry(0.12, 0.7, 0.5);
