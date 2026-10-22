@@ -76,6 +76,20 @@
         float tbar = (1.0 - smoothstep(0.13 - aw, 0.13 + aw, abs(abs(vW.x) - 12.6))) * (1.0 - smoothstep(0.5 - aw, 0.5 + aw, lz)) * step(abs(vW.z), 10.1);
         tile = mix(tile, vec3(0.08, 0.13, 0.24), max(inLane, tbar));
       }
+      // Разметка поля: белая — линии ворот и середина, красная — 2 м, жёлтая — 5 м, зелёная — 6 м (поперёк дна и по стенкам)
+      if (uMode != 2) {
+        float ax = abs(vW.x), fwx = fwidth(vW.x) * 0.8 + 0.001, hwl = 0.11;
+        float onField = uMode == 0 ? step(abs(vW.z), 10.0) : 1.0;
+        float lg = 1.0 - smoothstep(hwl - fwx, hwl + fwx, abs(ax - 12.5));
+        float l2 = 1.0 - smoothstep(hwl - fwx, hwl + fwx, abs(ax - 10.5));
+        float l5 = 1.0 - smoothstep(hwl - fwx, hwl + fwx, abs(ax - 7.5));
+        float l6 = 1.0 - smoothstep(hwl - fwx, hwl + fwx, abs(ax - 6.5));
+        float lc = 1.0 - smoothstep(hwl - fwx, hwl + fwx, ax);
+        tile = mix(tile, vec3(0.95, 0.97, 1.0), max(lg, lc) * onField);
+        tile = mix(tile, vec3(0.86, 0.12, 0.13), l2 * onField);
+        tile = mix(tile, vec3(0.98, 0.80, 0.05), l5 * onField);
+        tile = mix(tile, vec3(0.13, 0.66, 0.30), l6 * onField);
+      }
       if (uMode != 0 && vW.y > -0.35) tile = mix(tile, vec3(0.12, 0.22, 0.40), 0.85);
       float cz = caustic(vW.xz * 0.22 + vec2(vW.y * 0.05), uTime * 0.55);
       float depth = uMode == 0 ? 1.0 : clamp(-vW.y / 2.2, 0.0, 1.0);
@@ -410,7 +424,8 @@
       // цвет по зонам — красный до 2 м, жёлтый до 5 м, зелёный до 6 м, белый в середине; за воротами — поперечные
       const prof = [[0.012, -0.056], [0.05, -0.052], [0.074, -0.04], [0.058, -0.024], [0.078, -0.01], [0.078, 0.01], [0.058, 0.024], [0.074, 0.04], [0.05, 0.052], [0.012, 0.056]];
       const geo = new THREE.LatheGeometry(prof.map(q => new THREE.Vector2(q[0], q[1])), 12);
-      const step = 0.115, nSide = Math.round(R.HALF_L * 2 / step) + 1, endX = R.HALF_L + 1.55, nEnd = Math.round(R.HALF_W * 2 / step) + 1;
+      // Поперечные дорожки — по линии ворот, слева и справа от ворот (проём ворот с поплавками свободен)
+      const step = 0.115, nSide = Math.round(R.HALF_L * 2 / step) + 1, endX = R.HALF_L, gapZ = R.GOAL_HALF_W + R.POST_R + 0.3, nEnd = Math.round(R.HALF_W * 2 / step) + 1;
       const mat = WP.underwaterify(new THREE.MeshStandardMaterial({ roughness: 0.35, metalness: 0.05 }), 0.6);
       const inst = new THREE.InstancedMesh(geo, mat, nSide * 2 + nEnd * 2);
       const m4 = new THREE.Matrix4(), col = new THREE.Color(), q = new THREE.Quaternion(), one = new THREE.Vector3(1, 1, 1), pos = new THREE.Vector3();
@@ -424,23 +439,17 @@
       }
       for (const xx of [-endX, endX]) for (let i = 0; i < nEnd; i++) {
         const z = -R.HALF_W + i * step;
+        if (Math.abs(z) < gapZ) continue;
         q.copy(alongZ).multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), i * 0.7));
         m4.compose(pos.set(xx, 0.015, z), q, one); inst.setMatrixAt(k, m4);
-        inst.setColorAt(k, col.set(i % 10 < 2 ? 0xd62828 : 0xf3f3f3)); k++;
+        inst.setColorAt(k, col.set(0xf3f3f3)); k++; // линия ворот — белая
       }
+      inst.count = k;
       s.add(inst);
       // Трос под дисками
       const cable = new THREE.MeshStandardMaterial({ color: 0x2b3440, roughness: 0.6 });
       for (const zz of [-R.HALF_W, R.HALF_W]) { const c = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, R.HALF_L * 2 + 3.2, 6), cable); c.rotation.z = Math.PI / 2; c.position.set(0, 0.015, zz); s.add(c); }
-      // Боковые знаки на бортике
-      const marks = [[R.HALF_L, 0xffffff], [R.HALF_L - 2, 0xd62828], [R.HALF_L - 5, 0xf2c400], [R.HALF_L - 6, 0x2a9d4a], [0, 0xffffff]];
-      const bgeo = new THREE.BoxGeometry(0.12, 0.7, 0.5);
-      for (const [dx, c] of marks) {
-        const m = new THREE.MeshStandardMaterial({ color: c, roughness: 0.4, emissive: c, emissiveIntensity: 0.15 });
-        for (const sx of dx === 0 ? [1] : [-1, 1]) for (const zz of [-(R.POOL_HALF_W + 0.5), R.POOL_HALF_W + 0.5]) {
-          const b = new THREE.Mesh(bgeo, m); b.position.set(sx * dx, 0.65, zz); s.add(b);
-        }
-      }
+      // Разметка 2 / 5 / 6 м и линии ворот — цветными линиями на дне и стенках бассейна (FLOOR_FS), без знаков на бортике
       // Зоны возвращения (дальние углы за линией ворот)
       const reMat = new THREE.MeshStandardMaterial({ color: 0xd62828, roughness: 0.6, emissive: 0xd62828, emissiveIntensity: 0.25 });
       for (const sx of [-1, 1]) {

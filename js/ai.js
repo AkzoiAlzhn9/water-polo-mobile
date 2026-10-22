@@ -189,6 +189,42 @@
     return { F: F4.slice(0, n), names: ['wing', 'flat', 'flat', 'wing'], id: '4-' + n };
   };
 
+  // Без скучивания. В долгом заплыве (больше 4 м до точки по длине) каждый плывёт своим коридором: команда сразу
+  // растягивается на ширину бассейна, а у цели коридоры сходятся к точкам расстановки. Если push — точки ближе 1,7 м
+  // друг к другу (и к неподвижным игрокам fixed) раздвигаются, чтобы двое не стояли в одном месте.
+  AI.spreadLanes = function (list, fixed, push, carrier) {
+    if (!list.length) return;
+    const W = R.HALF_W - 2.2;
+    // Коридоры по нынешнему положению поперёк бассейна (пути не пересекаются); игрок с мячом занимает свой
+    const ord = list.concat(carrier && !list.includes(carrier) ? [carrier] : []).sort((a, b) => a.z - b.z);
+    const n = ord.length;
+    ord.forEach((p, i) => {
+      if (p === carrier || n < 3) return;
+      const run = Math.abs(p.target.x - p.x);
+      if (run < 4.5) return;
+      // Далеко от точки — цель в 3 м впереди в своём коридоре (сразу уходит в ширину); ближе — коридор сходится к точке
+      const lz = -W + 2 * W * i / (n - 1), b = clamp((run - 4.5) / 4, 0, 1);
+      const ahead = Math.sign(p.target.x - p.x) * Math.min(run, 3 + 6 * (1 - b));
+      p.target = { x: p.x + ahead, z: p.target.z + (lz - p.target.z) * b };
+    });
+    if (!push) return;
+    const MIN = 1.7, nl = list.length;
+    for (let it = 0; it < 2; it++) {
+      for (let i = 0; i < nl; i++) {
+        const a = list[i];
+        for (let j = i + 1; j < nl + fixed.length; j++) {
+          const b = j < nl ? list[j] : fixed[j - nl], bt = j < nl ? b.target : b;
+          let dx = a.target.x - bt.x, dz = a.target.z - bt.z, d = Math.hypot(dx, dz);
+          if (d >= MIN) continue;
+          if (d < 1e-3) { dx = 0; dz = a.z >= b.z ? 1 : -1; d = 1; }
+          const k = (MIN - d) / d * (j < nl ? 0.5 : 1);
+          a.target = { x: a.target.x + dx * k, z: clamp(a.target.z + dz * k, -R.HALF_W + 0.6, R.HALF_W - 0.6) };
+          if (j < nl) b.target = { x: b.target.x - dx * k, z: clamp(b.target.z - dz * k, -R.HALF_W + 0.6, R.HALF_W - 0.6) };
+        }
+      }
+    }
+  };
+
   AI.attackTargets = function (match, team, field) {
     const ai = team.ai, ball = match.ball;
     const fm = AI.formationFor(match, team, field.length);
@@ -226,8 +262,9 @@
         if (a && b && !a.hasBall && !b.hasBall) { a.slot = i2; b.slot = i1; a.slotName = fm.names[i2]; b.slotName = fm.names[i1]; }
       }
     }
+    const spread = [];
     for (const p of field) {
-      if (lanes.has(p) && !(p.ctrl && p.input.active)) { p.target = lanes.get(p); p.moveMode = 'sprint'; p.faceTo = ball.pos; continue; }
+      if (lanes.has(p) && !(p.ctrl && p.input.active)) { p.target = lanes.get(p); p.moveMode = 'sprint'; p.faceTo = ball.pos; spread.push(p); continue; }
       if (p.ctrl && p.input.active) continue;
       if (rs && rs.taker === p) { p.target = { x: rs.spot.x, z: rs.spot.z }; p.moveMode = 'sprint'; continue; }
       if (p.hasBall) continue;
@@ -256,10 +293,18 @@
       if (AI.lineD(team, tx) < minL) tx = team.dir * (R.HALF_L - minL);
       if (AI.lineD(team, tx) < 2.12 && bl > AI.lineD(team, tx)) tx = team.dir * (R.HALF_L - 2.2);
       p.target = { x: tx, z: tz };
+      if (!(play && play.target.has(p))) spread.push(p);
       const far = Math.hypot(tx - p.x, tz - p.z);
       const inPlay = play && (play.type === 'drive' ? play.target.has(p) && far > 0.8 : (p === play.driver && play.phase === 'drive') || (p === play.screener && play.phase === 'set'));
       p.moveMode = (counter && (far > 2 || ai.phaseT < 4)) || inPlay ? 'sprint' : 'swim';
       p.faceTo = ball.pos; p.liftTarget = 0.05;
+    }
+    if (match.state === 'live') {
+      const fixed = field.filter(p => !spread.includes(p)).map(p => p.target && !p.hasBall ? p.target : { x: p.x, z: p.z });
+      AI.spreadLanes(spread, fixed, true, car);
+      // Правило 2 метров после раздвижки: не глубже допустимого
+      const minL = Math.min(2.2, Math.max(0.3, bl - 0.25));
+      for (const p of spread) if (AI.lineD(team, p.target.x) < minL) p.target.x = team.dir * (R.HALF_L - minL);
     }
   };
 
@@ -618,6 +663,7 @@
       d.target = { x: tx, z: tz }; d.mark = a || null;
       d.moveMode = Math.hypot(tx - d.x, tz - d.z) > 2 ? 'sprint' : 'swim';
     }
+    AI.spreadLanes(field.filter(d => !taken.has(d) && !(d.ctrl && d.input.active) && !(d.screenT > 0)), [], false);
     return true;
   };
 

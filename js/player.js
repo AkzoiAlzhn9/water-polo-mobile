@@ -374,10 +374,20 @@
   let HID = null;
   const HIDDEN = () => HID || (HID = new THREE.MeshBasicMaterial({ visible: false }));
   // Щетина: та же оболочка бороды, но полупрозрачная — кожа проглядывает
-  function stubbleMat(hex) {
-    const k = 'stb' + hex;
-    return MC[k] || (MC[k] = new THREE.MeshStandardMaterial({ color: hex, roughness: 1, transparent: true, opacity: 0.42, depthWrite: false }));
+  // Край бороды, щетины и бровей гаснет плавно: u развёртки этих оболочек — глубина от края (0..1), alphaMap — рампа по u
+  let FADE = null;
+  function fadeMap() {
+    if (FADE) return FADE;
+    const n = 32, d = new Uint8Array(n * 4);
+    for (let i = 0; i < n; i++) { const t = i / (n - 1), a = t * t * (3 - 2 * t); d.set([255, Math.round(255 * a), 255, 255], i * 4); }
+    FADE = new THREE.DataTexture(d, n, 1); FADE.magFilter = FADE.minFilter = THREE.LinearFilter; FADE.needsUpdate = true;
+    return FADE;
   }
+  function fadeMat(hex, rough, opacity) {
+    const k = 'fd' + hex + rough + opacity;
+    return MC[k] || (MC[k] = new THREE.MeshStandardMaterial({ color: hex, roughness: rough, transparent: true, opacity, alphaMap: fadeMap(), depthWrite: false }));
+  }
+  function stubbleMat(hex) { return fadeMat(hex, 1, 0.42); }
   function plainMat(hex, rough) {
     const k = 'p' + hex + rough;
     return MC[k] || (MC[k] = new THREE.MeshStandardMaterial({ color: hex, roughness: rough }));
@@ -527,7 +537,7 @@
       const mEar = new THREE.MeshPhysicalMaterial({ map: earTexture(capHex, numHex, this.num), roughness: 0.3, clearcoat: 0.8, clearcoatRoughness: 0.15 });
       const mStrap = plainMat(new THREE.Color(capHex).multiplyScalar(0.7).getHex(), 0.6);
       const mDark = plainMat(0x2a1c14, 0.6);
-      const mBrow = plainMat(new THREE.Color(skin).multiplyScalar(0.35).getHex(), 0.8);
+      const mBrow = plainMat(new THREE.Color(skin).lerp(new THREE.Color(0x2b1d14), 0.6).getHex(), 0.9); // брови мягче: ближе к коже, не чёрная полоса
       const add = (parent, geo, mat, x, y, z, sx, sy, sz) => { const m = new THREE.Mesh(geo, mat); m.position.set(x || 0, y || 0, z || 0); if (sx) m.scale.set(sx, sy, sz); parent.add(m); return m; };
 
       const root = new THREE.Group();
@@ -559,8 +569,8 @@
         // Борода у ~20%, щетина ещё у ~25%; глаза — карие, тёмные, серо-голубые, зелёные, ореховые
         const IRIS = [0x2a1c14, 0x3b2616, 0x16110d, 0x46617d, 0x4d6440, 0x6a4a28];
         const iris = IRIS[Math.floor(morphRnd(this.name + '|eye')() * IRIS.length)];
-        const beardM = hb < 0.2 ? mBeard : hb < 0.45 ? stubbleMat(new THREE.Color(mBeard.color).multiplyScalar(0.7).getHex()) : HIDDEN();
-        mBodyParts = [mCap, beardM, mBrow, plainMat(0xe4ddd2, 0.2), plainMat(iris, 0.15)];
+        const beardM = hb < 0.2 ? fadeMat(mBeard.color.getHex(), 0.95, 1) : hb < 0.45 ? stubbleMat(new THREE.Color(mBeard.color).multiplyScalar(0.7).getHex()) : HIDDEN();
+        mBodyParts = [mCap, beardM, fadeMat(mBrow.color.getHex(), 0.9, 0.92), plainMat(0xd9cfc3, 0.12), plainMat(iris, 0.08)]; // белки не белоснежные, влажный блеск
       } else if (sk && WP.BODY.head) {
         const HM = headModel();
         add(headG, HM.skin, skinHeadMat(skin));
