@@ -833,16 +833,91 @@
     const poss = (ball.holder && ball.holder.team === team) || (ball.flight && ball.flight.type === 'pass' && ball.flight.team === team && ball.state === 'free');
     const rs = match.state === 'dead' ? match.restart : null;
     if (rs && rs.taker === gk) { gk.target = { x: rs.spot.x, z: rs.spot.z }; gk.moveMode = 'sprint'; return; }
-    if (ball.state === 'free' && !ball.flight && AI.ownLineD(team, ball.pos.x) < 3.2 && Math.abs(ball.pos.z) < 3 && ball.vel.length() < 4) {
-      gk.target = { x: ball.pos.x, z: ball.pos.z }; gk.moveMode = 'sprint'; return;
+    // Читает игру: свободный мяч или чужой пас у ворот — выходит, если уверен, что успеет раньше соперника
+    const rush = gk.biteT > 0 ? null : AI.gkRead(match, gk, dt);
+    if (rush) {
+      // Мяч высоко и уже рядом — выпрыгивает навстречу
+      const near = Math.hypot(ball.pos.x - gk.x, ball.pos.z - gk.z) < 1.6 && ball.pos.y > 0.6;
+      gk.target = rush; gk.moveMode = 'sprint'; gk.faceTo = ball.pos; gk.liftTarget = near ? 1.15 : 0.35; return;
     }
     if (gk.biteT > 0) return;
-    gk.target = AI.gkIdeal(team, ball.pos.x, ball.pos.z, poss); gk.faceTo = ball.pos; gk.moveMode = 'swim';
+    gk.target = AI.gkIdeal(team, ball.pos.x, ball.pos.z, poss); gk.faceTo = ball.pos;
+    // Не успел или передумал — возвращается в ворота во весь опор
+    gk.moveMode = Math.hypot(gk.target.x - gk.x, gk.target.z - gk.z) > 1.5 ? 'sprint' : 'swim';
     const car = ball.holder;
     if (car && car.team !== team && AI.goalDist(car.team, car.x, car.z) < 10) gk.liftTarget = car.action && car.action.type === 'windup' ? 1.0 : 0.72;
     else gk.liftTarget = 0.42;
     // Смещаясь боком, высоко не выпрыгнешь
     gk.liftTarget *= 1 - 0.35 * (gk.unset || 0);
+  };
+
+  // Путь свободного мяча на ближайшие T секунд (упрощённо: полёт без сопротивления, на воде — торможение как в ball.js)
+  AI.ballPath = function (b, T, h) {
+    const out = [];
+    let x = b.pos.x, y = b.pos.y, z = b.pos.z, vx = b.vel.x, vy = b.vel.y, vz = b.vel.z;
+    const d = Math.exp(-2.2 * h);
+    for (let t = 0; t <= T + 1e-6; t += h) {
+      out.push({ t, x, y, z });
+      if (y > 0.09 || vy > 0.3) {
+        vy -= R.G * h; x += vx * h; y += vy * h; z += vz * h;
+        if (y <= 0.07 && vy < 0) { y = 0.07; vy = 0; vx *= 0.45; vz *= 0.45; }
+      } else { vx *= d; vz *= d; x += vx * h; z += vz * h; }
+      x = clamp(x, -R.HALF_L, R.HALF_L); z = clamp(z, -R.HALF_W, R.HALF_W);
+    }
+    return out;
+  };
+
+  // Выход вратаря. Раз в 0,1 с: где на пути мяча вратарь возьмёт его раньше всего (до 6 м от ворот, мяч не выше рук),
+  // и когда до мяча доберётся самый быстрый соперник. Время соперника он оценивает с ошибкой — она разыгрывается
+  // один раз на эпизод (чем слабее вратарь, тем больше; изредка — грубый просчёт). Выходит, если уверен с запасом;
+  // вышел — не бросает на полпути, пока не увидит, что явно опоздал. Свой защитник успевает раньше — оставляет ему.
+  AI.gkRead = function (match, gk, dt) {
+    const team = gk.team, ball = match.ball, f = ball.flight;
+    const ok = match.state === 'live' && ball.state === 'free' && !ball.holder && !(f && f.type === 'shot' && !f.touched) && !(f && f.type === 'pass' && f.team === team);
+    if (!ok) { gk.rush = null; gk.readOn = false; return null; }
+    const a = gk.attrs.gk * (team.ai.gkMul || 1);
+    if (!gk.readOn || gk.readF !== f) {
+      gk.readOn = true; gk.readF = f; gk.rush = null; gk.readT = 0;
+      const g = (Math.random() + Math.random() + Math.random() - 1.5) * 2; // ≈ нормальное, σ ≈ 1
+      gk.readErr = g * (0.06 + 0.3 * (1 - a / 100)) + (Math.random() < 0.07 + 0.25 * (1 - a / 100) ? rnd(0.4, 0.9) : 0); // изредка — грубый просчёт
+    }
+    gk.readT -= dt;
+    if (gk.readT > 0) return gk.rush;
+    gk.readT = 0.1;
+    const path = AI.ballPath(ball, 2.2, 0.1);
+    const vG = (1.15 + 0.95 * gk.attrs.spd / 100) * 1.12 * 0.72;
+    const reactG = gk.rush ? 0 : 0.3 - 0.15 * a / 100;
+    let gBest = 1e9, gPt = null;
+    for (const s of path) {
+      const L = AI.ownLineD(team, s.x);
+      if (s.y > 1.2 || L < 0.3 || L > 6 || Math.abs(s.z) > 6) continue; // в выпрыгивании вратарь достаёт до ~1,2 м
+      const tg = Math.max(s.t, reactG + Math.max(0, Math.hypot(s.x - gk.x, s.z - gk.z) - 0.75) / vG);
+      if (tg < gBest) { gBest = tg; gPt = s; }
+    }
+    if (!gPt) { gk.rush = null; return null; }
+    let oBest = 1e9, dBest = 1e9;
+    for (const p of match.all()) {
+      if (!p.active || p.isGK || p.excluded || p.rolling) continue;
+      const v = (1.15 + 0.95 * p.attrs.spd / 100) * 1.15;
+      let best = 1e9;
+      const t0 = p === ball.lastTouch ? 0.4 - (match.t - (ball.releaseT || 0)) : 0; // сам бросивший сразу не подхватит
+      for (const s of path) {
+        if (s.y > 1.2 || s.t < t0) continue;
+        const tp = Math.max(s.t, 0.12 + Math.max(0, Math.hypot(s.x - p.x, s.z - p.z) - 0.6) / v);
+        if (tp < best) best = tp;
+      }
+      if (p.team === team) dBest = Math.min(dBest, best); else oBest = Math.min(oBest, best);
+    }
+    // Мяч у самых ворот и рядом никого — забрать в любом случае
+    const easy = AI.ownLineD(team, gPt.x) < 2.5 && oBest > gBest + 0.6;
+    if (!easy && dBest + 0.15 < gBest && dBest < oBest) { gk.rush = null; return null; }
+    const seen = oBest * (1 + gk.readErr);
+    const margin = gk.rush ? -0.35 : 0.12 - 0.1 * (a - 80) / 20;
+    if (easy || gBest + margin < seen) {
+      if (!gk.rush) gk.rushFrom = { x: gk.x, z: gk.z, t: match.t };
+      gk.rush = { x: gPt.x, z: gPt.z };
+    } else gk.rush = null;
+    return gk.rush;
   };
 
   // Сейв: реакция, прогноз точки, выпад

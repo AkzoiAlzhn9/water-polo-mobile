@@ -848,7 +848,7 @@
       const style = act && act.opts ? act.opts.style : null;
       const W = this.wrestle;
       let swimK = Math.max(0, Math.min(1, (sp - 0.6) / 0.7));
-      if (this.isGK && !this.excluded) swimK *= sp > 1.3 ? 0.8 : 0.2;
+      if (this.isGK && !this.excluded) swimK = this.rush ? Math.max(0, Math.min(1, (sp - 0.35) / 0.5)) : swimK * (sp > 1.3 ? 0.8 : 0.2); // выход из ворот — кролем
       if (this.hasBall && this.holdMode === 'hold') swimK = 0;
       if (act && act.type !== 'steal' && style !== 'flick') swimK = 0;
       if (W) swimK = 0;

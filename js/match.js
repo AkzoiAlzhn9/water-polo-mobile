@@ -996,6 +996,14 @@
       if (f && f.type === 'shot' && p.isGK && p.team !== f.team && f.onTarget && !f.saveCounted && !this.so) this.countSave(p, f);
       if (f && f.type === 'pass' && f.team === p.team && f.from !== p) { p.lastPassFrom = f.from; p.lastPassT = this.t; }
       p.gainT = this.t; p.gainHow = how; p.xpTry = undefined;
+      // Выход вратаря: забрал — молодец; вышел далеко, а мяч взял соперник — ошибка, ворота пустые
+      const og = p.team.opp.gk;
+      if (p.isGK && p.rush && AI.ownLineD(p.team, p.x) > 2) { this.say(p.name + ' читает игру: выходит из ворот и забирает мяч.', 'save'); p.team.stats.gkOut = (p.team.stats.gkOut || 0) + 1; }
+      else if (og && og.active && og.rush && AI.ownLineD(og.team, og.x) > 2) {
+        this.say(og.name + ' вышел из ворот и не успел — ворота пустые!', 'info');
+        og.team.stats.gkErr = (og.team.stats.gkErr || 0) + 1; og.rush = null;
+      }
+      if (p.isGK) p.rush = null;
       b.attach(p);
       p.holdT = 0; p.decideT = p.team.ai.decision * rnd(0.4, 0.9);
       p.holdMode = p.speed > 0.95 ? 'dribble' : 'hold';
@@ -1757,6 +1765,8 @@
         else if (p.isGK) pc = sp < 6 ? 0.95 : 0.7;
         else if (f && f.type === 'pass') pc = (0.05 + p.attrs.def / 800) * (1 - clamp(sp / 14, 0, 0.85)) * (1 - (f.power || 0) * 0.5);
         else pc = sp < 6 ? 0.85 : 0.5;
+        // Вратарь вышел из ворот и ловит под давлением: соперник рядом — может выронить
+        if (p.isGK && p.rush) { const o = AI.nearestOpp(p, b.pos.x, b.pos.z, true); if (o.d < 1.4) pc -= (1.4 - o.d) * 0.4 + (85 - p.attrs.gk) / 200; }
         if (Math.random() < pc) {
           this.catchBall(p, f && f.type === 'pass' && f.team !== p.team ? 'intercept' : 'catch');
           return;
