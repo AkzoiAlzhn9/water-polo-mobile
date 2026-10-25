@@ -526,7 +526,7 @@ WP.Net = (function () {
       for (const p of t.players) {
         const a = p.action, at = a ? ACT.indexOf(a.type) : -1;
         const sty = a ? STY.indexOf((a.opts && a.opts.style) || a.style || '') : -1;
-        const f = (p.hasBall ? 1 : 0) | (p.excluded ? 2 : 0) | (p.hands ? 4 : 0) | (p.gkHandActive ? 8 : 0) | (p.outForGame ? 16 : 0) | (p.hardTime ? 32 : 0);
+        const f = (p.hasBall ? 1 : 0) | (p.excluded ? 2 : 0) | (p.hands ? 4 : 0) | (p.gkHandActive ? 8 : 0) | (p.outForGame ? 16 : 0) | (p.hardTime ? 32 : 0) | (p.hasBall && p.holdMode === 'dribble' ? 64 : 0);
         const row = [ti, p.num, r2(p.x), r2(p.z), r2(p.heading), r1(p.lift), r1(p.vx), r1(p.vz), at, at >= 0 ? r2(Math.min(a.t, 9)) : 0, at >= 0 ? r2(Math.min(a.dur, 9)) : 0, sty, f, p.excluded ? Math.ceil(p.exclTimer) : 0]; // скорость и подъём — до 0,1: трафик меньше, на глаз не видно
         if (p.gkHandActive) row.push(r2(p.gkHand.x), r2(p.gkHand.y), r2(p.gkHand.z));
         P.push(row);
@@ -534,7 +534,7 @@ WP.Net = (function () {
     });
     const b = m.ball, h = b.holder;
     const s = {
-      q: ++game.seq, t: r2(m.t), st: STATES.indexOf(m.state), cl: Math.round(m.clock * 10) / 10, sc: Math.round(m.shotClock * 10) / 10, pe: m.period,
+      q: ++game.seq, hm: Math.round(performance.now()), t: r2(m.t), st: STATES.indexOf(m.state), cl: Math.round(m.clock * 10) / 10, sc: Math.round(m.shotClock * 10) / 10, pe: m.period,
       sco: [m.teams[0].score, m.teams[1].score], po: m.possession ? m.teams.indexOf(m.possession) : -1,
       b: [r2(b.pos.x), r2(b.pos.y), r2(b.pos.z), h ? m.teams.indexOf(h.team) : -1, h ? h.num : 0, r2(b.vel.x), r2(b.vel.y), r2(b.vel.z)],
       c1: m.controlled.p1 ? m.controlled.p1.num : 0, c2: m.controlled.p2 ? m.controlled.p2.num : 0,
@@ -572,7 +572,18 @@ WP.Net = (function () {
     // Потери: номера снимков идут подряд — пропуски значит не дошли (прямой канал без повторов)
     if (game.seq > 0) game.lost = (game.lost || 0) + Math.min(50, s.q - game.seq - 1);
     game.got = (game.got || 0) + 1;
-    game.seq = s.q; game.buf.push({ at: now, s }); if (game.buf.length > 10) game.buf.shift();
+    // Часы хозяина: «сейчас у хозяина» ≈ now − off. off — самая быстрая доставка (минимум now − hm), медленно ползёт вверх,
+    // чтобы пережить смену маршрута и уход часов. Опоздание снимка сверх минимума — неровность сети; по ней — запас буфера
+    let ht = now;
+    if (s.hm) {
+      const d = now - s.hm, el = game.offAt ? now - game.offAt : 0;
+      game.hOff = game.hOff === undefined || d < game.hOff + el * 0.002 ? d : game.hOff + el * 0.002;
+      game.offAt = now;
+      const late = game.late || (game.late = []);
+      late.push(d - game.hOff); if (late.length > 90) late.shift();
+      ht = s.hm;
+    }
+    game.seq = s.q; game.buf.push({ at: now, ht, s }); if (game.buf.length > 12) game.buf.shift();
     // Как часто и как ровно приходят снимки — от этого зависит, насколько можно сократить задержку картинки
     if (game.lastArr) { const iv = Math.min(500, now - game.lastArr); game.ivl = game.ivl ? game.ivl * 0.9 + iv * 0.1 : iv; game.jit = game.jit !== undefined ? game.jit * 0.9 + Math.abs(iv - game.ivl) * 0.1 : 10; }
     game.lastArr = now;
@@ -767,11 +778,26 @@ WP.Net = (function () {
     const buf = game.buf; if (!buf.length) return;
     // Буфер подстраивается: по прямому соединению ~50 мс, по неровной сети больше (без рывков)
     // Через сервер снимки приходят реже (запись не встаёт в очередь) — буфер растёт вместе с интервалом, иначе картинка стоит рывками
-    game.delay = Math.max(45, Math.min(260, (game.ivl || 40) * 1.3 + (game.jit || 10) * 2.5));
-    const rt = performance.now() - game.delay;
+    const now = performance.now(), hostClock = !game.oldSync && game.hOff !== undefined && buf[buf.length - 1].s.hm; // oldSync — прежний способ, для сравнения в test/smooth.js
+    let rt;
+    if (hostClock) {
+      // По часам хозяина: снимки встают на свои места, как их снял хозяин, и неровная доставка не дёргает картинку.
+      // Запас = 90-й процентиль опоздания + интервал между снимками; меняется плавно, чтобы время картинки не прыгало
+      const L = game.late.slice().sort((x, y) => x - y), p90 = L[Math.floor(L.length * 0.9)] || 0;
+      const want = Math.max(25, Math.min(260, p90 + (game.ivl || 33) + 6));
+      game.delay = game.delay ? game.delay + Math.max(-0.15, Math.min(0.8, want - game.delay)) : want; // время картинки почти не ускоряется и не замедляется
+      rt = now - game.hOff - game.delay;
+    } else {
+      game.delay = Math.max(45, Math.min(260, (game.ivl || 40) * 1.3 + (game.jit || 10) * 2.5));
+      rt = now - game.delay;
+    }
     let a = buf[0], b = buf[buf.length - 1], k = 1;
-    for (let i = buf.length - 1; i > 0; i--) { if (buf[i - 1].at <= rt) { a = buf[i - 1]; b = buf[i]; k = Math.max(0, Math.min(1, (rt - a.at) / Math.max(1, b.at - a.at))); break; } }
-    applySnap(m, a.s, b.s, k);
+    for (let i = buf.length - 1; i > 0; i--) { if (buf[i - 1].ht <= rt) { a = buf[i - 1]; b = buf[i]; k = Math.max(0, Math.min(1, (rt - a.ht) / Math.max(1, b.ht - a.ht))); break; } }
+    if (!hostClock) for (let i = buf.length - 1; i > 0; i--) { if (buf[i - 1].at <= rt) { a = buf[i - 1]; b = buf[i]; k = Math.max(0, Math.min(1, (rt - a.at) / Math.max(1, b.at - a.at))); break; } }
+    game.rtHost = hostClock ? rt : 0;
+    // Снимок задержался — не замираем: до 0,12 с пловцы плывут дальше по своей скорости
+    const ex = hostClock && rt > b.ht ? Math.min(0.12, (rt - b.ht) / 1000) : 0;
+    applySnap(m, a.s, b.s, k, ex);
   }
   const angLerp = (x, y, k) => x + WP.angNorm(y - x) * k;
   function syncRosters(m, s) {
@@ -785,25 +811,37 @@ WP.Net = (function () {
       }
     });
   }
-  function applySnap(m, sa, sb, k) {
+  // Свободный мяч из снимка e, досчитанный до момента now: в воздухе — с гравитацией, на воде — с торможением, как в ball.js
+  function ballAt(e, now) {
+    const lb = e.s.b, base = game.rtHost && e.s.hm ? now - game.hOff - e.ht : now - e.at;
+    const age = Math.max(0, Math.min(0.25, base / 1000 + (game.rtt || 0) / 2000 * 0.5));
+    if (lb[1] < 0.12 && Math.abs(lb[6]) < 0.3) { const f = (1 - Math.exp(-2.2 * age)) / 2.2; return { x: lb[0] + lb[5] * f, y: lb[1], z: lb[2] + lb[7] * f }; }
+    return { x: lb[0] + lb[5] * age, y: Math.max(0.07, lb[1] + lb[6] * age - 4.9 * age * age), z: lb[2] + lb[7] * age };
+  }
+  function applySnap(m, sa, sb, k, ex) {
     syncRosters(m, sb);
     const liveNow = STATES[sb.st] === 'live';
-    const lead = liveNow ? Math.min(0.15, (game.delay || 100) / 1000 * 0.6 + (game.rtt || 0) / 2000 * 0.5) : 0;
+    const lead = liveNow ? Math.min(0.15, (game.delay || 100) / 1000 * 0.6 + (game.rtt || 0) / 2000 * 0.5) + (ex || 0) : 0;
+    // Свой пловец: действие (бросок, пас, кач) и подъём — из самого свежего снимка, без буфера: отклик на нажатие быстрее
+    const newest = game.buf[game.buf.length - 1].s, mineRow = !game.oldSync && newest.p.find(r => r[0] === 1 && r[1] === newest.c2);
     const rowsA = {}; for (const r of sa.p) rowsA[r[0] * 100 + r[1]] = r;
     for (const r of sb.p) {
       const t = m.teams[r[0]], p = t.players.find(q => q.num === r[1]); if (!p) continue;
       const o = rowsA[r[0] * 100 + r[1]] || r;
+      const own = mineRow && r[0] === 1 && r[1] === mineRow[1];
+      const ra = own ? mineRow : r; // действие и подъём своего — из свежего снимка
       p.x = o[2] + (r[2] - o[2]) * k; p.z = o[3] + (r[3] - o[3]) * k;
       // Упреждение по скорости: картинка у гостя почти не отстаёт от хозяина (в паузах игры — без упреждения)
-      if (lead > 0) { p.x += r[6] * lead; p.z += r[7] * lead; }
-      p.heading = angLerp(o[4], r[4], k); p.lift = o[5] + (r[5] - o[5]) * k;
-      p.vx = r[6]; p.vz = r[7];
+      const vx = game.oldSync ? r[6] : o[6] + (r[6] - o[6]) * k, vz = game.oldSync ? r[7] : o[7] + (r[7] - o[7]) * k; // скорость тоже между снимками — упреждение без скачков
+      if (lead > 0) { p.x += vx * lead; p.z += vz * lead; }
+      p.heading = angLerp(o[4], r[4], k); p.lift = own ? ra[5] : o[5] + (r[5] - o[5]) * k;
+      p.vx = vx; p.vz = vz;
       const f = r[12];
-      p.hasBall = !!(f & 1); p.excluded = !!(f & 2); p.hands = !!(f & 4); p.gkHandActive = !!(f & 8); p.outForGame = !!(f & 16); p.hardTime = !!(f & 32); p.exclTimer = r[13];
-      if (r[8] >= 0) {
-        const type = ACT[r[8]], style = STY[r[11]] || 'over';
-        if (!p.action || p.action.type !== type) p.action = { type, t: r[9], dur: r[10] || 0.3, ai: true, opts: { style }, style };
-        else { p.action.t = r[9]; p.action.dur = r[10] || p.action.dur; }
+      p.hasBall = !!(f & 1); p.holdMode = f & 64 ? 'dribble' : 'hold'; p.excluded = !!(f & 2); p.hands = !!(f & 4); p.gkHandActive = !!(f & 8); p.outForGame = !!(f & 16); p.hardTime = !!(f & 32); p.exclTimer = r[13];
+      if (ra[8] >= 0) {
+        const type = ACT[ra[8]], style = STY[ra[11]] || 'over';
+        if (!p.action || p.action.type !== type) p.action = { type, t: ra[9], dur: ra[10] || 0.3, ai: true, opts: { style }, style };
+        else { p.action.t = ra[9]; p.action.dur = ra[10] || p.action.dur; }
       } else p.action = null;
       if (f & 8 && r.length >= 17) p.gkHand.set(r[14], r[15], r[16]);
     }
@@ -812,14 +850,29 @@ WP.Net = (function () {
     let x = ba[0] + (bb[0] - ba[0]) * k, y = ba[1] + (bb[1] - ba[1]) * k, z = ba[2] + (bb[2] - ba[2]) * k;
     // Летящий мяч — по самому свежему снимку, досчитанный до «сейчас» с гравитацией: прилетает вовремя
     const last = game.buf[game.buf.length - 1], lb = last && last.s.b;
-    if (liveNow && lb && lb[3] < 0 && lb.length >= 8) {
-      const age = Math.min(0.25, (performance.now() - last.at) / 1000 + (game.rtt || 0) / 2000 * 0.5);
-      x = lb[0] + lb[5] * age; z = lb[2] + lb[7] * age;
-      y = Math.max(0.07, lb[1] + lb[6] * age - 4.9 * age * age);
-    }
+    const freeBall = liveNow && lb && lb[3] < 0 && lb.length >= 8;
+    const now = performance.now(), be = game.bErr || (game.bErr = { x: 0, y: 0, z: 0, e: null, t: 0 });
+    if (freeBall) {
+      const pt = ballAt(last, now);
+      // Новый снимок поправил свободный мяч: сравниваем старый и новый досчёт на один и тот же момент и разницу гасим за ~0,1 с
+      if (be.e && be.e !== last && be.e.s.b[3] < 0) {
+        const op = ballAt(be.e, now), ex = op.x - pt.x, ey = op.y - pt.y, ez = op.z - pt.z;
+        if (Math.hypot(ex, ey, ez) < 0.8) { be.x += ex; be.y += ey; be.z += ez; } else be.x = be.y = be.z = 0;
+      }
+      x = pt.x; y = pt.y; z = pt.z;
+    } else be.x = be.y = be.z = 0;
+    be.e = freeBall ? last : null;
+    if (game.oldSync) be.x = be.y = be.z = 0;
+    const bk = Math.exp(-(be.t ? Math.min(0.1, (now - be.t) / 1000) : 0) * 14); be.t = now;
+    be.x *= bk; be.y *= bk; be.z *= bk;
+    x += be.x; y = Math.max(0.05, y + be.y); z += be.z;
     ball.vel.set((x - ball.pos.x) * 60, (y - ball.pos.y) * 60, (z - ball.pos.z) * 60);
     ball.pos.set(x, y, z);
-    if (bb[3] >= 0) { const hp = m.teams[bb[3]].players.find(q => q.num === bb[4]); ball.holder = hp || null; ball.state = hp ? 'held' : 'free'; }
+    if (bb[3] >= 0) {
+      const hp = m.teams[bb[3]].players.find(q => q.num === bb[4]); ball.holder = hp || null; ball.state = hp ? 'held' : 'free';
+      // Мяч в руке — по той же формуле, что у хозяина, от нарисованного пловца: не отстаёт от ладони и не дрожит
+      if (hp && sb.hm && !game.oldSync && !freeBall) { hp.ballHoldPos(ball.pos); ball.vel.set(0, 0, 0); }
+    }
     else { ball.holder = null; ball.state = 'free'; }
     // Табло, состояние, управляемые игроки
     const st = STATES[sb.st] || 'live';
