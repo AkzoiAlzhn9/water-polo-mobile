@@ -51,7 +51,7 @@
     },
     start() {
       const p = this.pending; this.pending = null;
-      const ok = this.startAt(p.goalT, p.side, 'ПОВТОР', null);
+      const ok = this.startGoal(p) || this.startAt(p.goalT, p.side, 'ПОВТОР', null);
       if (!ok && this.restoreCam) { world.setCamMode(this.restoreCam); this.restoreCam = null; }
     },
     startAt(t0, sideIn, label, onEnd) {
@@ -75,8 +75,33 @@
       WP.UI.replay(true, label);
       return true;
     },
+    // Повтор гола как в трансляции — три плана: общий план атаки, бросок крупно в замедлении, мяч в сетке из-за ворот
+    startGoal(p) {
+      const t0 = p.goalT, side = p.side;
+      const fr = this.buf.filter(f => f.t >= t0 - 3.6 && f.t <= t0 + 0.75);
+      if (fr.length < 30) return false;
+      const sr = p.scorer && p.scorer.rig, RS = 33; // на игрока в кадре: 5 + 2·4 + 2·(4+1) + 2·(4+1) чисел
+      const shooterAt = (fa) => { const i = sr ? fa.rigs.indexOf(sr) : -1; return i >= 0 ? new THREE.Vector3(fa.d[i * RS], 0, fa.d[i * RS + 2]) : null; };
+      const zs = Math.sign((shooterAt(fr[Math.floor(fr.length * 0.6)]) || { z: 1 }).z) || 1;
+      const GX = side * WP.R.HALF_L;
+      const segs = [
+        { from: fr[0].t, to: t0 - 1.15, speed: 0.8, cam: (b) => ({ pos: new THREE.Vector3(b.x - side * 5, 5.2, b.z * 0.5 + 10.5), look: new THREE.Vector3(b.x + side * 1.5, 0.2, b.z * 0.6) }) },
+        { from: t0 - 1.15, to: t0 - 0.4, speed: 0.3, cam: (b, sh) => { const c = sh || b; return { pos: new THREE.Vector3(c.x - side * 2.4, 1.05, c.z + zs * 2.6), look: new THREE.Vector3(c.x + side * 0.6, 0.8, c.z) }; } },
+        { from: t0 - 0.45, to: fr[fr.length - 1].t, speed: 0.4, cam: (b) => ({ pos: new THREE.Vector3(GX + side * 3.2, 1.25, -zs * 1.1), look: new THREE.Vector3(GX - side * 2.5, 0.6, b.z * 0.4) }) },
+      ].filter(sg => sg.to - sg.from > 0.2);
+      if (segs.length < 2) return false;
+      this.onEnd = null; this.frames = fr; this.segs = segs; this.seg = 0; this.t = segs[0].from; this.active = true; this.shooterAt = shooterAt;
+      this.prevCam = this.restoreCam || world.camMode; this.restoreCam = null;
+      world.replayCam = { pos: new THREE.Vector3(), look: new THREE.Vector3(), cut: true };
+      world.setCamMode('replay');
+      for (const k in match.rings) match.rings[k].visible = false;
+      for (const k in match.thruMk) match.thruMk[k].g.visible = false;
+      for (const k in match.markers) match.markers[k].arrow.visible = match.markers[k].ret.visible = false;
+      WP.UI.replay(true, 'ПОВТОР');
+      return true;
+    },
     stop() {
-      this.active = false; this.frames = null;
+      this.active = false; this.frames = null; this.segs = null; world.replayCam = null;
       world.setCamMode(this.prevCam);
       WP.UI.replay(false);
       acc = 0;
@@ -84,13 +109,20 @@
       if (cb) cb();
     },
     update(dt) {
-      this.t += dt * this.speed;
-      const fr = this.frames;
+      const fr = this.frames, sg = this.segs && this.segs[this.seg];
+      this.t += dt * (sg ? sg.speed : this.speed);
+      if (sg && this.t >= sg.to) {
+        // Склейка: следующий план со своего момента, камера переставляется сразу
+        if (++this.seg >= this.segs.length) { this.stop(); return null; }
+        this.t = this.segs[this.seg].from; world.replayCam.cut = true;
+      }
       if (this.t >= fr[fr.length - 1].t) { this.stop(); return null; }
       let i = 0;
       while (i < fr.length - 2 && fr[i + 1].t <= this.t) i++;
       const k = Math.max(0, Math.min(1, (this.t - fr[i].t) / (fr[i + 1].t - fr[i].t || 1)));
-      return this.apply(fr[i], fr[i + 1], k);
+      const bp = this.apply(fr[i], fr[i + 1], k);
+      if (this.segs) { const c = this.segs[this.seg].cam(bp, this.shooterAt(fr[i])); world.replayCam.pos.copy(c.pos); world.replayCam.look.copy(c.look); }
+      return bp;
     },
   };
   function hookReplay(m) {
@@ -100,7 +132,7 @@
       uiEmit(kind, data);
       if (isDemo || m.cfg.tutorial || m.cfg.net) return;
       if (kind === 'goal' && !m.so) {
-        Replay.pending = { at: m.t + 1.5, goalT: m.t, side: data.team.dir };
+        Replay.pending = { at: m.t + 1.5, goalT: m.t, side: data.team.dir, scorer: data.scorer };
         // Режиссура: сначала крупный план забившего
         if (data.scorer && data.scorer.rig) {
           Replay.restoreCam = world.camMode === 'focus' ? Replay.restoreCam : world.camMode;

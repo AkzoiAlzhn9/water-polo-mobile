@@ -198,17 +198,32 @@
       float n1 = sin(p.x * 11.0 + sin(p.y * 7.3 + uTime * 0.8) * 2.2) * sin(p.y * 9.7 + sin(p.x * 5.1 - uTime * 0.6) * 2.0);
       float pat = 0.5 + 0.5 * n1;
       float foam = clamp(fm * (0.7 + 0.3 * pat) - 0.04, 0.0, 1.0);
-      col = mix(col, vec3(0.9, 0.96, 0.99), foam * 0.7);
+      col = mix(col, vec3(0.9, 0.96, 0.99), foam * 0.82);
       gl_FragColor = vec4(col, a);
     }`;
 
+  // Частицы воды: капли (aKind 0) — с бликом и голубоватой каймой; водяная пыль (aKind 1) — мягкая, разрастается и тает
   const PART_VS = `
-    attribute float aLife; attribute float aSize;
-    varying float vL;
-    void main(){ vL = aLife; vec4 mv = modelViewMatrix * vec4(position, 1.0); gl_PointSize = aSize * (320.0 / -mv.z); gl_Position = projectionMatrix * mv; }`;
+    attribute float aLife; attribute float aSize; attribute float aKind;
+    varying float vL; varying float vK;
+    void main(){
+      vL = aLife; vK = aKind;
+      vec4 mv = modelViewMatrix * vec4(position, 1.0);
+      float grow = aKind > 0.5 ? 1.0 + 2.2 * (1.0 - clamp(aLife, 0.0, 1.0)) : 1.0;
+      gl_PointSize = aSize * grow * (320.0 / -mv.z);
+      gl_Position = projectionMatrix * mv;
+    }`;
   const PART_FS = `
-    varying float vL;
-    void main(){ vec2 c = gl_PointCoord - 0.5; float d = length(c); if (d > 0.5) discard; float a = smoothstep(0.5, 0.1, d) * clamp(vL, 0.0, 1.0) * 0.85; gl_FragColor = vec4(0.93, 0.97, 1.0, a); }`;
+    varying float vL; varying float vK;
+    void main(){
+      vec2 c = gl_PointCoord - 0.5; float d = length(c); if (d > 0.5) discard;
+      float life = clamp(vL, 0.0, 1.0);
+      if (vK > 0.5) { gl_FragColor = vec4(0.9, 0.95, 1.0, smoothstep(0.5, 0.0, d) * life * 0.28); return; }
+      float body = smoothstep(0.5, 0.32, d);
+      float hi = smoothstep(0.2, 0.0, length(c - vec2(-0.12, -0.14)));
+      vec3 col = mix(vec3(0.62, 0.8, 0.9), vec3(0.95, 0.98, 1.0), smoothstep(0.5, 0.15, d)) + hi * 0.6;
+      gl_FragColor = vec4(col, body * life * 0.9);
+    }`;
 
   class World {
     constructor(container) {
@@ -725,7 +740,27 @@
       this.reflDirty = true; // фан-сектора перекрашены — переснять отражение
     }
 
-    cheer(big) { this.cheerT = big ? 3.5 : 1.5; }
+    cheer(big) { this.cheerT = big ? 3.5 : 1.5; if (big) this.flashT = 2.8; }
+
+    // Вспышки фотоаппаратов на трибунах после гола: несколько точек каждый кадр загораются на случайных местах
+    updateFlashes(dt) {
+      if (!this.crowd || !(this.flashT > 0)) { if (this.flashes) this.flashes.visible = false; return; }
+      this.flashT -= dt;
+      if (!this.flashes) {
+        const n = 24, geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
+        this.flashes = new THREE.Points(geo, new THREE.PointsMaterial({ color: 0xffffff, size: 0.55, map: new THREE.CanvasTexture(this.foamSprite), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }));
+        this.flashes.frustumCulled = false; this.flashes.renderOrder = 3; this.scene.add(this.flashes);
+      }
+      const P = this.flashes.geometry.attributes.position, seats = this.crowd.seats, nVis = this.crowd.bodies.count;
+      const L = this.flashL || (this.flashL = new Float32Array(P.count)), k = Math.min(1, this.flashT);
+      for (let i = 0; i < P.count; i++) {
+        // Каждая вспышка горит ~0,1 с; новые зажигаются всё реже, по мере того как трибуны успокаиваются
+        if (L[i] > 0) { L[i] -= dt; if (L[i] <= 0) P.setXYZ(i, 0, -60, 0); continue; }
+        if (nVis && Math.random() < dt * 9 * k) { const st = seats[Math.floor(Math.random() * nVis)]; P.setXYZ(i, st[0], st[1] + 0.95, st[2]); L[i] = 0.06 + Math.random() * 0.06; }
+      }
+      P.needsUpdate = true; this.flashes.visible = true;
+    }
 
     updateCrowd(dt) {
       if (this.cheerT <= 0 && !this.crowdDirty) return;
@@ -883,14 +918,15 @@
     }
 
     buildParticles() {
-      const N = this.pN = 1000;
+      const N = this.pN = 1400;
       const geo = new THREE.BufferGeometry();
       this.pPos = new Float32Array(N * 3); this.pVel = new Float32Array(N * 3);
-      this.pLife = new Float32Array(N); this.pSize = new Float32Array(N); this.pMax = new Float32Array(N);
+      this.pLife = new Float32Array(N); this.pSize = new Float32Array(N); this.pMax = new Float32Array(N); this.pKind = new Float32Array(N);
       for (let i = 0; i < N; i++) this.pPos[i * 3 + 1] = -50;
       geo.setAttribute('position', new THREE.BufferAttribute(this.pPos, 3));
       geo.setAttribute('aLife', new THREE.BufferAttribute(this.pLife, 1));
       geo.setAttribute('aSize', new THREE.BufferAttribute(this.pSize, 1));
+      geo.setAttribute('aKind', new THREE.BufferAttribute(this.pKind, 1));
       this.pts = new THREE.Points(geo, new THREE.ShaderMaterial({ vertexShader: PART_VS, fragmentShader: PART_FS, transparent: true, depthWrite: false }));
       this.pts.frustumCulled = false; this.pts.renderOrder = 2; this.pts.layers.set(1);
       this.scene.add(this.pts);
@@ -909,15 +945,42 @@
         this.pVel[i * 3 + 1] = (1.2 + Math.random() * 2.2) * power;
         this.pVel[i * 3 + 2] = Math.sin(a) * sp * 0.9 + (dir ? dir.z * power * 0.8 : 0);
         this.pMax[i] = 0.5 + Math.random() * 0.6;
-        this.pLife[i] = 1;
-        this.pSize[i] = 0.05 + Math.random() * 0.08 * Math.min(2, power);
+        this.pLife[i] = 1; this.pKind[i] = 0;
+        this.pSize[i] = 0.035 + Math.random() * 0.07 * Math.min(2, power);
       }
+      // К сильным всплескам — облачко водяной пыли
+      if (power >= 0.8 && n >= 6) this.mist(x, y, z, Math.min(6, Math.round(n / 4)), power * 0.6, dir);
+    }
+
+    // Водяная пыль: медленные мягкие клубы, тормозятся воздухом и почти не падают
+    mist(x, y, z, n, power, dir) {
+      if (this.lowGfx) n = Math.ceil(n / 2);
+      for (let k = 0; k < n; k++) {
+        const i = this.pIdx; this.pIdx = (this.pIdx + 1) % this.pN;
+        const a = Math.random() * Math.PI * 2, sp = (0.2 + Math.random() * 0.5) * power;
+        this.pPos[i * 3] = x + (Math.random() - 0.5) * 0.3; this.pPos[i * 3 + 1] = Math.max(0.05, y + Math.random() * 0.2); this.pPos[i * 3 + 2] = z + (Math.random() - 0.5) * 0.3;
+        this.pVel[i * 3] = Math.cos(a) * sp + (dir ? dir.x * power * 0.5 : 0);
+        this.pVel[i * 3 + 1] = (0.4 + Math.random() * 0.8) * power;
+        this.pVel[i * 3 + 2] = Math.sin(a) * sp + (dir ? dir.z * power * 0.5 : 0);
+        this.pMax[i] = 0.6 + Math.random() * 0.5; this.pLife[i] = 1; this.pKind[i] = 1;
+        this.pSize[i] = 0.18 + Math.random() * 0.2 * power;
+      }
+    }
+
+    // Капля, слетающая с мяча или руки: одна частица с заданной скоростью
+    drip(x, y, z, vx, vy, vz) {
+      const i = this.pIdx; this.pIdx = (this.pIdx + 1) % this.pN;
+      this.pPos[i * 3] = x; this.pPos[i * 3 + 1] = y; this.pPos[i * 3 + 2] = z;
+      this.pVel[i * 3] = vx; this.pVel[i * 3 + 1] = vy; this.pVel[i * 3 + 2] = vz;
+      this.pMax[i] = 0.5 + Math.random() * 0.4; this.pLife[i] = 1; this.pKind[i] = 0;
+      this.pSize[i] = 0.025 + Math.random() * 0.03;
     }
 
     updateParticles(dt) {
       for (let i = 0; i < this.pN; i++) {
         if (this.pLife[i] <= 0) continue;
-        this.pVel[i * 3 + 1] -= 9.81 * dt;
+        if (this.pKind[i] > 0.5) { const k = Math.exp(-dt * 2.5); this.pVel[i * 3] *= k; this.pVel[i * 3 + 2] *= k; this.pVel[i * 3 + 1] = this.pVel[i * 3 + 1] * k - 1.2 * dt; }
+        else this.pVel[i * 3 + 1] -= 9.81 * dt;
         this.pPos[i * 3] += this.pVel[i * 3] * dt;
         this.pPos[i * 3 + 1] += this.pVel[i * 3 + 1] * dt;
         this.pPos[i * 3 + 2] += this.pVel[i * 3 + 2] * dt;
@@ -926,7 +989,7 @@
         if (this.pLife[i] <= 0) this.pPos[i * 3 + 1] = -50;
       }
       const g = this.pts.geometry;
-      g.attributes.position.needsUpdate = true; g.attributes.aLife.needsUpdate = true; g.attributes.aSize.needsUpdate = true;
+      g.attributes.position.needsUpdate = true; g.attributes.aLife.needsUpdate = true; g.attributes.aSize.needsUpdate = true; g.attributes.aKind.needsUpdate = true;
     }
 
     setShadows(list) {
@@ -1057,6 +1120,14 @@
         cam.position.copy(pos); cam.lookAt(look);
         return;
       }
+      // Режиссёрский повтор: камеру ставит сценарий повтора; на склейке — сразу, внутри плана — мягко следует
+      if (this.camMode === 'replay' && this.replayCam) {
+        const rc = this.replayCam;
+        if (rc.cut) { pos.copy(rc.pos); look.copy(rc.look); rc.cut = false; }
+        else { pos.lerp(rc.pos, 1 - Math.exp(-dt * 5)); look.lerp(rc.look, 1 - Math.exp(-dt * 9)); }
+        cam.position.copy(pos); cam.lookAt(look);
+        return;
+      }
       if (this.camMode === 'replay' && this.replayPos) {
         tp = this.replayPos.clone();
         tl = new THREE.Vector3(focus.x, Math.max(0, focus.y * 0.6), focus.z);
@@ -1100,6 +1171,7 @@
       for (const m of this.floorMats) m.uniforms.uTime.value = this.time;
       this.updateParticles(dt);
       this.updateCrowd(dt);
+      this.updateFlashes(dt);
       this.flushFoam(dt);
     }
 

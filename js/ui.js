@@ -277,6 +277,8 @@ WP.UI = (function () {
     $('feed').style.visibility = on ? 'hidden' : '';
     $('radar').style.visibility = on ? 'hidden' : '';
     $('hint').style.visibility = on ? 'hidden' : '';
+    // Повтор смотрят чисто: без баннера «ГОЛ», карточки забившего, скорости броска и карточки игрока
+    for (const id of ['banner', 'tvcard', 'speed', 'pcard']) { const el = $(id); if (el) el.style.visibility = on ? 'hidden' : ''; }
   }
 
   let comboTimer = null, speedTimer = null;
@@ -619,7 +621,7 @@ WP.UI = (function () {
     const stam = (p) => '<span class="tac-st"><i style="width:' + Math.round(p.stamina * 100) + '%" class="' + (p.stamina < 0.35 ? 'lo' : p.stamina < 0.6 ? 'mid' : '') + '"></i></span>';
     const dots = (p) => '<span class="tac-f">' + '●'.repeat(Math.min(3, p.fouls || 0)) + '</span>';
     const row = (p, kind) => {
-      const st = p.excluded ? '<em class="bad">удалён</em>' : p.rolling ? '<em>плывёт на замену</em>' : p.outForGame ? '<em class="bad">до конца матча</em>' : '';
+      const st = p.excluded ? '<em class="bad">удалён</em>' : p.rolling ? '<em>плывёт на замену</em>' : p.subPending ? '<em>замена в остановке</em>' : p.outForGame ? '<em class="bad">до конца матча</em>' : '';
       const dis = subsRo || (kind === 'in' && p.outForGame);
       return '<button class="tac-row' + (kind === 'out' && subSel === String(p.num) ? ' sel' : '') + '" data-t="' + kind + '" data-v="' + p.num + '"' + (dis ? ' disabled' : '') + '><b>' + p.num + '</b><span>' + p.name + (match.isMe(p) ? ' (ты)' : '') + '<small>' + ROLE_S[p.role] + ' · ' + WP.ovr(p.role, p.attrs) + '</small></span>' + stam(p) + dots(p) + st + '</button>';
     };

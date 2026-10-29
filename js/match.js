@@ -278,10 +278,30 @@
         else if (type === 'goal') this.signal('goalthrow', { spot, goalX: -team.dir * R.HALF_L });
         else this.signal('free', { spot, dir: team.dir });
       }
-      if (team.human) this.setControl(team.human, taker);
+      this.stoppageSubs(type, opts);
+      if (team.human) this.setControl(team.human, this.restart.taker);
       if (team.opp.human) {
         const d = this.nearestTo(team.opp, spot.x, spot.z, p => !p.isGK);
         if (d) this.setControl(team.opp.human, d);
+      }
+    }
+
+    // Замены — только в остановке игры. Заказанные человеком выходят в любой ближайшей остановке; автоматические — когда
+    // пауза подольше (аут, угловой, удаление, гол, тайм-аут, перерыв) или игрок совсем выдохся
+    stoppageSubs(type, opts) {
+      if (this.so) return;
+      const longStop = type !== 'free' || !!(opts && opts.noSignal);
+      for (const t of this.teams) {
+        for (const out of t.players.slice()) {
+          const inn = out.subPending; if (!inn) continue;
+          out.subPending = null;
+          if (!t.players.includes(out) || !t.bench.includes(inn) || inn.outForGame || out.excluded || out.hasBall) continue;
+          this.swap(t, out, inn);
+          if (this.restart && this.restart.taker === out) this.restart.taker = inn;
+          this.say('Замена в команде ' + t.name + ': №' + inn.num + ' ' + inn.name + ' вместо №' + out.num + ' ' + out.name + '.', 'info');
+          if (t.human) this.emit('passinfo', { msg: 'Замена: №' + inn.num + ' ' + inn.name + ' вместо №' + out.num + ' ' + out.name });
+        }
+        if (this.clock > 0) this.autoSubs(t, longStop ? 0.45 : 0.25, 1);
       }
     }
 
@@ -644,6 +664,7 @@
       this.emit('shotspeed', { kmh, p, tag: lagNow > 0.45 ? 'с ходу — вратарь не успел' : opts.type === 'skip' ? 'от воды' : '' });
       p.holdMode = 'hold';
       if (style === 'flick') this.world.splash(from.x, 0.08, from.z, 8, 0.8, vel.clone().normalize());
+      else { const dn = vel.clone().normalize(); for (let i = 0; i < 6; i++) this.world.drip(from.x, from.y, from.z, vel.x * (0.15 + Math.random() * 0.2) + (Math.random() - 0.5), vel.y * 0.2 + Math.random(), vel.z * (0.15 + Math.random() * 0.2) + (Math.random() - 0.5)); this.world.mist(from.x, from.y, from.z, 2, 0.5, dn); }
       team.stats.shots++; p.stats.shots++;
       if (onTarget) team.stats.onTarget++;
       if (rs) { const wasPen = rs.type === 'penalty'; this.putLive(); if (wasPen && this.so) this.so.shotT = this.t; }
@@ -1261,6 +1282,7 @@
         for (const p of t.players) if (p.active && !p.isGK) { p.target = { x: -t.dir * (3 + (i % 3) * 1.4), z: -R.HALF_W + 1.2 + Math.floor(i / 3) * 1.2 }; p.moveMode = 'swim'; p.action = null; i++; }
         this.autoSubs(t, 0.7);
       }
+      this.stoppageSubs('timeout');
       this.emit('timeout', { team });
       return true;
     }
@@ -1285,6 +1307,7 @@
           .sort((a, b) => (b.role === p.role) - (a.role === p.role) || b.stamina - a.stamina)[0];
         if (!cand) continue;
         this.swap(team, p, cand); n++;
+        if (this.restart && this.restart.taker === p) this.restart.taker = cand;
         this.say('Замена в команде ' + team.name + ': №' + cand.num + ' ' + cand.name + ' вместо №' + p.num + ' ' + p.name + '.', 'info');
       }
     }
@@ -1330,15 +1353,14 @@
         this.say('Замена в команде ' + team.name + ': №' + inn.num + ' ' + inn.name + ' вместо №' + out.num + ' ' + out.name + '.', 'info');
         return 'Замена: №' + inn.num + ' ' + inn.name + ' вместо №' + out.num + ' ' + out.name;
       }
-      if (out.isGK) return 'Вратаря меняют в остановке игры';
-      if (out.ctrl && !this.cfg.pc) { const id = out.ctrl; const o = this.nearestTo(team, out.x, out.z, q => !q.isGK && q !== out); if (o) this.setControl(id, o); }
-      out.rolling = true; out.rollTo = inn;
-      return '№' + out.num + ' ' + out.name + ' плывёт в зону замены, выйдет №' + inn.num + ' ' + inn.name;
+      for (const p of team.players) if (p.subPending === inn) p.subPending = null;
+      out.subPending = inn;
+      return 'Замена в ближайшей остановке игры: №' + inn.num + ' ' + inn.name + ' вместо №' + out.num + ' ' + out.name;
     }
     quickSub(team) {
-      const out = team.players.filter(p => p.active && !p.isGK && !p.hasBall && !p.rolling && !this.isMe(p)).sort((a, b) => a.stamina - b.stamina)[0];
+      const out = team.players.filter(p => p.active && !p.isGK && !p.hasBall && !p.rolling && !p.subPending && !this.isMe(p)).sort((a, b) => a.stamina - b.stamina)[0];
       if (!out) return;
-      const inn = team.bench.filter(b => !b.isGK && !b.outForGame).sort((a, b) => (b.role === out.role) - (a.role === out.role) || b.stamina - a.stamina)[0];
+      const inn = team.bench.filter(b => !b.isGK && !b.outForGame && !team.players.some(p => p.subPending === b)).sort((a, b) => (b.role === out.role) - (a.role === out.role) || b.stamina - a.stamina)[0];
       if (!inn) { this.emit('passinfo', { msg: 'На скамейке нет свежих игроков' }); return; }
       if (inn.stamina < out.stamina + 0.05) { this.emit('passinfo', { msg: 'Самый уставший — №' + out.num + ' ' + out.name + ', но на скамейке не свежее' }); return; }
       this.emit('passinfo', { msg: this.requestSub(team, out, inn) });
@@ -1397,7 +1419,7 @@
           break;
       }
       this.updateExclusions(dt);
-      this.rollingSubs(dt);
+      // Замены по ходу игры через зону возвращения убраны: команды меняются в остановках (stoppageSubs)
       if (this.aiChallengeAt && this.t >= this.aiChallengeAt) {
         this.aiChallengeAt = 0;
         const c = this.lastCall;
@@ -1595,6 +1617,8 @@
         }
       }
       const evs = ball.step(dt, cols);
+      // Мокрый мяч в первые 0,3 с полёта роняет капли
+      if (ball.flight && ball.pos.y > 0.25 && this.t - (ball.releaseT || 0) < 0.3 && Math.random() < dt * 45) this.world.drip(ball.pos.x, ball.pos.y, ball.pos.z, ball.vel.x * 0.3, ball.vel.y * 0.3, ball.vel.z * 0.3);
       for (const e of evs) { this.handleBallEvent(e); if (this.state !== 'live') return; }
       if (ball.flight && ball.flight.type === 'pass' && this.t - ball.flight.t > (ball.flight.through ? 3.4 : 2.2)) ball.flight = null;
       if (ball.state === 'free') this.checkCatches();
@@ -1648,6 +1672,8 @@
           const s = e.strength;
           if (f && f.type === 'pass') { if (f.wet && !f.landed) f.landed = true; else ball.flight = null; }
           this.world.splash(ball.pos.x, 0.05, ball.pos.z, Math.round(4 + s * 18), 0.4 + s * 1.2);
+          // Корона всплеска: капли разлетаются кольцом
+          if (s > 0.25) for (let i = 0, n = Math.round(6 + s * 10); i < n; i++) { const a = i / n * Math.PI * 2, v = 1.2 + s * 1.6; this.world.drip(ball.pos.x + Math.cos(a) * 0.12, 0.06, ball.pos.z + Math.sin(a) * 0.12, Math.cos(a) * v, 1.6 + s * 2.2, Math.sin(a) * v); }
           this.world.addRipple(ball.pos.x, ball.pos.z, 0.02 + s * 0.06);
           this.world.foam(ball.pos.x, ball.pos.z, 0.3 + s * 0.5, 0.4 + s * 0.6);
           if (s > 0.15) WP.Audio.splash(s);
@@ -1899,7 +1925,13 @@
       if (pp) team.stats.ppGoals++;
       if (f && f.penalty) team.stats.penGoals++;
       if (f && f.saveCounted) { const gk = team.opp.gk; if (gk) { gk.stats.saves--; team.opp.stats.saves--; } }
-      if (scorer) { scorer.stats.goals++; scorer.action = { type: 'celebrate', t: 0, dur: 2.6 }; }
+      if (scorer) {
+        scorer.stats.goals++;
+        // Празднование — своё у каждого гола: руки вверх, кулак, палец в небо, удары по воде, выпрыгивание
+        const kinds = ['arms', 'fist', 'point', 'slap', 'leap'], kind = kinds[Math.floor(Math.random() * kinds.length)];
+        scorer.action = { type: 'celebrate', t: 0, dur: 2.6, kind };
+        if (kind === 'leap') scorer.liftTarget = 1.3;
+      }
       // Партнёры подплывают к забившему и празднуют вместе; пропустивший вратарь опускается в воду
       for (const t of this.teams) for (const q of t.players) q.celebT = null;
       if (scorer && !this.so) {
@@ -1907,7 +1939,7 @@
           if (q === scorer || !q.active || q.isGK || Math.hypot(q.x - scorer.x, q.z - scorer.z) > 7) continue;
           const a = Math.atan2(q.z - scorer.z, q.x - scorer.x);
           q.celebT = { x: scorer.x + Math.cos(a) * 0.95, z: scorer.z + Math.sin(a) * 0.95 }; q.target = q.celebT; q.moveMode = 'sprint'; q.faceTo = scorer;
-          q.action = { type: 'celebrate', t: -rnd(0.25, 0.7), dur: 2.3 };
+          q.action = { type: 'celebrate', t: -rnd(0.25, 0.7), dur: 2.3, kind: Math.random() < 0.6 ? 'team' : 'fist' };
         }
         const og = team.opp.gk; if (og && og.active) og.liftTarget = 0.12;
       }
@@ -1931,7 +1963,7 @@
       this.noteCall({ type: 'goal', against: team.opp, team, scorer, pp, pen: !!(f && f.penalty), correct: Math.random() < 0.95 });
       this.emit('goal', { team, scorer });
       if (scorer) this.emit('card', { kind: 'goal', player: scorer, team, extra: [how, pp ? 'в большинстве' : f && f.penalty ? 'с пенальти' : ''].filter(Boolean).join(' · ') });
-      if (this.clock > 0) for (const t of this.teams) this.autoSubs(t, 0.5, 1);
+      if (this.clock > 0) { this.stoppageSubs('goal'); for (const t of this.teams) this.autoSubs(t, 0.5, 1); }
     }
 
     updateExclusions(dt) {
@@ -2021,6 +2053,7 @@
           if (out) { this.swap(t, out, me); this.say(me.name + ' выходит на замену вместо ' + out.name + '.', 'info'); }
         }
       }
+      this.stoppageSubs('break');
       for (const t of this.teams) {
         for (const p of t.roster) p.stamina = Math.min(1, p.stamina + (this.period === 3 ? 0.45 : 0.3));
         for (const p of t.players.slice()) if (p.excluded && !p.outForGame) { p.excluded = false; p.hardTime = false; }

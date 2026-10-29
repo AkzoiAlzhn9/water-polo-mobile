@@ -190,14 +190,16 @@
   }
 
   // Тело из Blender (js/body-model.js): общие массивы, карты нормалей и затенения; геометрия — под телосложение
-  let BODY = null;
+  // Две модели: полная (WP.BODY) и облегчённая (WP.BODY_LO, js/body-model-lo.js) — для дальних игроков и слабых телефонов
+  const BODY = [];
+  const bodyDef = (lo) => lo && WP.BODY_LO ? WP.BODY_LO : WP.BODY;
   const dec = (b64, T) => { const b = atob(b64), u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return new T(u.buffer); };
   const tex = (url) => { const t = new THREE.TextureLoader().load(url); t.anisotropy = 4; return t; };
-  function bodyData() {
-    if (BODY) return BODY;
-    const D = WP.BODY;
-    BODY = { pos: dec(D.pos, Float32Array), nrm: dec(D.nrm, Int8Array), uv: dec(D.uv, Float32Array), idx: dec(D.idx, D.idx32 ? Uint32Array : Uint16Array), ji: dec(D.ji, Uint8Array), jw: dec(D.jw, Uint8Array), normalMap: tex(D.normalMap), aoMap: tex(D.aoMap) };
-    return BODY;
+  function bodyData(lo) {
+    const i = lo && WP.BODY_LO ? 1 : 0;
+    if (BODY[i]) return BODY[i];
+    const D = bodyDef(lo);
+    return (BODY[i] = { pos: dec(D.pos, Float32Array), nrm: dec(D.nrm, Int8Array), uv: dec(D.uv, Float32Array), idx: dec(D.idx, D.idx32 ? Uint32Array : Uint16Array), ji: dec(D.ji, Uint8Array), jw: dec(D.jw, Uint8Array), normalMap: tex(D.normalMap), aoMap: tex(D.aoMap) });
   }
   // Голова из Blender: кожа лица с картами, глаза (белок и радужка), брови, борода, шапочка по форме головы
   let HEADM = null;
@@ -221,10 +223,11 @@
   // Разные лица и фигуры из одной модели: плавные деформации (морфы), считаются один раз при загрузке.
   // Лицо — в осях головы по ориентирам модели (подбородок, низ челюсти); тело — вздутие по нормали (мышечная масса).
   // 0 челюсть шире/квадратнее, 1 нос крупнее, 2 надбровье тяжелее, 3 щёки полнее, 4 лицо длиннее, 5 тело массивнее
-  let MORPH = null;
-  function bodyMorphs() {
-    if (MORPH) return MORPH;
-    const B = bodyData(), D = WP.BODY, n = D.count, P = B.pos, N = B.nrm, R = D.rig;
+  const MORPH = [];
+  function bodyMorphs(lo) {
+    const mi = lo && WP.BODY_LO ? 1 : 0;
+    if (MORPH[mi]) return MORPH[mi];
+    const B = bodyData(lo), D = bodyDef(lo), n = D.count, P = B.pos, N = B.nrm, R = D.rig;
     const hx0 = R.neck[0] + R.head[0], hy0 = R.neck[1] + R.head[1];
     const chinY = D.chin[0], chinX = D.chin[1], jawY = D.jaw_y, ye = chinY + 0.108;
     const cl = (v) => v < 0 ? 0 : v > 1 ? 1 : v, ss = (a, b, v) => { const t = cl((v - a) / (b - a)); return t * t * (3 - 2 * t); };
@@ -255,7 +258,7 @@
       const wb = ss(0.14, 0.04, py) * (1 - ss(0.4, 0.47, Math.abs(pz))) * ss(-1.05, -0.8, py);
       if (wb > 0) { const k = 0.016 * wb / 127; T[5][i3] = N[i3] * k; T[5][i3 + 1] = N[i3 + 1] * k; T[5][i3 + 2] = N[i3 + 2] * k; }
     }
-    return (MORPH = T.map(a => new THREE.BufferAttribute(a, 3)));
+    return (MORPH[mi] = T.map(a => new THREE.BufferAttribute(a, 3)));
   }
   // Независимые псевдослучайные числа от строки (mulberry32 после FNV-хеша): у WP.hash похожие строки дают похожие значения
   function morphRnd(str) {
@@ -272,10 +275,11 @@
     return [h(0) * 1.7 - 0.7, h(1) * 1.6 - 0.6, h(2) * 1.5 - 0.5, h(3) * 1.6 - 0.6, h(4) * 1.4 - 0.6, Math.max(-0.6, Math.min(1, h(5) * 1.2 - 0.4 + role))];
   }
 
-  function bodySkinGeo(bw) {
-    const key = bw.toFixed(2);
+  function bodySkinGeo(bw, lo) {
+    lo = !!(lo && WP.BODY_LO);
+    const key = (lo ? 'L' : '') + bw.toFixed(2);
     if (BGC[key]) return BGC[key];
-    const B = bodyData(), D = WP.BODY, n = D.count, P = B.pos, out = new Float32Array(P.length);
+    const B = bodyData(lo), D = bodyDef(lo), n = D.count, P = B.pos, out = new Float32Array(P.length);
     const k = bw - 1, ca = Math.cos(D.bind.arm), sa = Math.sin(D.bind.arm), cl = Math.cos(D.bind.leg), sl = Math.sin(D.bind.leg);
     // Для каждой кости: [вид, сторона]; вид 0 — торс, 1 — шея/голова (шире на K[2]), 2 — рука/нога (ось), 3 — кисть/стопа (сдвиг)
     // У модели v2 голова — часть кожи: её не раздуваем, полнеет только шея
@@ -317,7 +321,7 @@
     g.setAttribute('skinWeight', new THREE.BufferAttribute(B.jw, 4, true));
     g.setIndex(new THREE.BufferAttribute(B.idx, 1));
     for (const [st, c, m] of D.groups) g.addGroup(st, c, m);
-    if (D.v === 2) { g.morphAttributes.position = bodyMorphs(); g.morphTargetsRelative = true; }
+    if (D.v === 2) { g.morphAttributes.position = bodyMorphs(lo); g.morphTargetsRelative = true; }
     return (BGC[key] = g);
   }
 
@@ -328,10 +332,16 @@
     return MC[k] || (MC[k] = WP.underwaterify(new THREE.MeshPhysicalMaterial({ color: hex, map: skinTex(), roughness: 0.46, clearcoat: 0.45, clearcoatRoughness: 0.3, sheen: 0.2, sheenRoughness: 0.7, sheenColor: new THREE.Color(0xffe2cc) })));
   }
   // Кожа тела из Blender: рельеф мышц — картой нормалей, впадины и складки — запечённым затенением
-  function skinBodyMat(hex) {
-    const k = 'skinB' + hex;
+  // Для слабых телефонов: та же кожа без лака и бархата (clearcoat/sheen) — заметно дешевле для видеокарты
+  function cheapMat(m) {
+    const k = 'cheap' + m.uuid;
+    return MC[k] || (MC[k] = WP.underwaterify(new THREE.MeshStandardMaterial({ color: m.color, map: m.map, normalMap: m.normalMap, aoMap: m.aoMap, aoMapIntensity: m.aoMapIntensity, roughness: Math.min(1, m.roughness + 0.08) })));
+  }
+  function skinBodyMat(hex, lo) {
+    lo = !!(lo && WP.BODY_LO);
+    const k = 'skinB' + (lo ? 'L' : '') + hex;
     if (MC[k]) return MC[k];
-    const B = bodyData();
+    const B = bodyData(lo);
     return (MC[k] = WP.underwaterify(new THREE.MeshPhysicalMaterial({ color: hex, map: skinTex(), normalMap: B.normalMap, aoMap: B.aoMap, aoMapIntensity: 1.0, roughness: 0.46, clearcoat: 0.45, clearcoatRoughness: 0.3, sheen: 0.2, sheenRoughness: 0.7, sheenColor: new THREE.Color(0xffe2cc) })));
   }
   function skinHeadMat(hex) {
@@ -638,7 +648,7 @@
       };
       const aR = mkArm(1), aL = mkArm(-1), lR = mkLeg(1), lL = mkLeg(-1);
       this.rig = { root, body, chest, neck, headG, aR, aL, lR, lL };
-      if (sk) this.skinBody(skinBodyMat(skin), mSuit, mBodyParts);
+      if (sk) this.skinBody(skin, mSuit, mBodyParts);
       root.userData.dyn = true; // не попадает в снимок отражения арены
       this.world.scene.add(root);
       this.j = {
@@ -650,20 +660,41 @@
 
     // Кожа из Blender на узлах рига: риг ставится в позу привязки (руки и ноги разведены, суставы прямые),
     // запоминаются обратные матрицы — дальше кожа просто следует за узлами при любой анимации
-    skinBody(mSkin, mSuit, parts) {
+    skinBody(skinHex, mSuit, parts) {
       const r = this.rig, D = WP.BODY;
       const map = { body: r.body, chest: r.chest, neck: r.neck, head: r.headG, shR: r.aR.sh, elR: r.aR.el, handR: r.aR.hand, shL: r.aL.sh, elL: r.aL.el, handL: r.aL.hand, hipR: r.lR.hip, knR: r.lR.kn, footR: r.lR.foot, hipL: r.lL.hip, knL: r.lL.kn, footL: r.lL.foot };
       r.body.rotation.set(0, 0, 0); r.body.position.y = 0; r.chest.rotation.set(0, 0, 0); r.neck.rotation.set(0, 0, 0);
       this.setArm(r.aR, 0, D.bind.arm, 0, 1); this.setArm(r.aL, 0, D.bind.arm, 0, -1);
       this.setLeg(r.lR, 0, D.bind.leg, 0, 1); this.setLeg(r.lL, 0, D.bind.leg, 0, -1);
       r.lR.foot.rotation.z = 0; r.lL.foot.rotation.z = 0;
-      const mesh = new THREE.SkinnedMesh(bodySkinGeo(this.bw), [mSkin, mSuit].concat(parts || []));
-      if (mesh.morphTargetInfluences) { const mm = morphMix(this); for (let i = 0; i < mm.length; i++) mesh.morphTargetInfluences[i] = mm[i]; }
-      r.body.add(mesh);
+      const mm = morphMix(this);
+      const make = (lo) => {
+        const mesh = new THREE.SkinnedMesh(bodySkinGeo(this.bw, lo), [skinBodyMat(skinHex, lo), mSuit].concat(parts || []));
+        if (mesh.morphTargetInfluences) for (let i = 0; i < mm.length; i++) mesh.morphTargetInfluences[i] = mm[i];
+        mesh.frustumCulled = false; // руки уходят далеко от позы привязки
+        r.body.add(mesh);
+        return mesh;
+      };
+      const hi = make(false), lo = WP.BODY_LO ? make(true) : null;
       r.root.updateMatrixWorld(true);
-      mesh.bind(new THREE.Skeleton(D.bones.map(n => map[n])), mesh.matrixWorld);
-      mesh.frustumCulled = false; // руки уходят далеко от позы привязки
-      r.skin = mesh;
+      // Обе модели на одном скелете (у облегчённой те же кости)
+      const skel = new THREE.Skeleton(D.bones.map(n => map[n]));
+      hi.bind(skel, hi.matrixWorld);
+      if (lo) { lo.bind(WP.BODY_LO.bones.join() === D.bones.join() ? skel : new THREE.Skeleton(WP.BODY_LO.bones.map(n => map[n])), lo.matrixWorld); lo.visible = false; }
+      r.skin = hi; r.skinLo = lo;
+      if (lo) { r.matsLo = lo.material.slice(); r.matsCheap = lo.material.map((mt, i) => i < 2 ? cheapMat(mt) : mt); }
+    }
+
+    // Уровень детализации: далеко от камеры (с поправкой на размер экрана) или слабая графика — облегчённая модель
+    updateLod() {
+      const r = this.rig; if (!r || !r.skinLo) return;
+      const cam = this.world.camera, h = (cam.userData && cam.userData.h) || 800;
+      const d = Math.hypot(cam.position.x - this.x, cam.position.y - 0.4, cam.position.z - this.z);
+      const far = (r.skinLo.visible ? 12.5 : 14) * Math.max(0.6, Math.min(1.8, h / 800));
+      const lo = this.world.lowGfx || d > far;
+      if (lo !== r.skinLo.visible) { r.skinLo.visible = lo; r.skin.visible = !lo; }
+      const mats = this.world.lowGfx ? r.matsCheap : r.matsLo;
+      if (r.skinLo.material[0] !== mats[0]) r.skinLo.material = mats.slice();
     }
 
     dispose() { if (this.rig) { this.world.scene.remove(this.rig.root); this.rig = null; } }
@@ -842,6 +873,7 @@
 
     animate(dt, t, ball) {
       if (!this.rig) return;
+      this.updateLod();
       const j = this.j, rig = this.rig;
       const sp = this.speed;
       const act = this.action;
@@ -985,10 +1017,35 @@
           case 'catch':
             T.rs = 2.9; T.ra = 0.25; T.re = 0.3; fast = true;
             break;
-          case 'celebrate':
-            T.rs = 2.95 + 0.2 * Math.sin(t * 9); T.ra = 0.35; T.re = 0.2;
-            T.ls = 2.95 + 0.2 * Math.sin(t * 9 + 1.5); T.la = 0.35; T.le = 0.2;
+          case 'celebrate': {
+            const ct = Math.max(0, act.t), pump = Math.abs(Math.sin(ct * 7));
+            switch (act.kind) {
+              case 'fist': // кулак: правая рука качает вверх-вниз, левая — в сторону
+                T.rs = 2.2 + 0.7 * pump; T.ra = 0.35; T.re = 1.7 - 1.3 * pump; T.ls = 1.3; T.la = 1.0; T.le = 0.5; T.pitch = -0.05;
+                break;
+              case 'point': // палец в небо и разворот к трибунам
+                T.rs = 3.05; T.ra = 0.12; T.re = 0.04; T.ls = 1.5; T.la = 1.35; T.le = 0.25; T.yaw = 0.5 * Math.sin(ct * 1.6);
+                break;
+              case 'slap': { // руки вверх — и хлопок по воде, брызги
+                const f = (ct * 1.8) % 1, up = f < 0.55;
+                T.rs = T.ls = up ? 2.7 : 1.1; T.ra = T.la = up ? 0.6 : 1.15; T.re = T.le = up ? 0.3 : 0.15; T.pitch = up ? -0.08 : 0.25;
+                if (!up && !act.slapped) { act.slapped = true; const c2 = Math.cos(this.heading), s2 = Math.sin(this.heading); this.world.splash(this.x + c2 * 0.5, 0.05, this.z + s2 * 0.5, 14, 1.0); this.world.addRipple(this.x, this.z, 0.04); }
+                if (up) act.slapped = false;
+                break;
+              }
+              case 'leap': // выпрыгнул из воды, руки буквой V
+                T.rs = T.ls = 2.85; T.ra = T.la = 0.95; T.re = T.le = 0.12; T.pitch = -0.12;
+                if (ct < 0.3 && Math.random() < dt * 30) this.world.splash(this.x, 0.08, this.z, 2, 0.9);
+                break;
+              case 'team': // партнёры тянутся обнять забившего
+                T.rs = T.ls = 1.85 + 0.15 * Math.sin(ct * 5); T.ra = T.la = 0.55; T.re = T.le = 0.55; T.pitch = 0.1;
+                break;
+              default:
+                T.rs = 2.95 + 0.2 * Math.sin(t * 9); T.ra = 0.35; T.re = 0.2;
+                T.ls = 2.95 + 0.2 * Math.sin(t * 9 + 1.5); T.la = 0.35; T.le = 0.2;
+            }
             break;
+          }
           case 'dive': { // выпрыгивание: мощный толчок ногами (ножницы, колени выпрямляются), корпус тянется за рукой
             gkIK = true; fast = true;
             const kick = Math.sin(Math.PI * Math.min(1, act.t / 0.35)), sc = Math.sin(act.t * 22);
@@ -1117,9 +1174,20 @@
         this.world.foam(this.x - c * 1.35 * this.h, this.z - sn * 1.35 * this.h, 0.32, 0.11 * sp * dt * 30);
         if (Math.random() < dt * 10) this.world.splash(this.x - c * 1.4, 0.03, this.z - sn * 1.4, 1, 0.35);
       } else if (!this.excluded) {
-        this.world.foam(this.x, this.z, 0.45, (W ? 0.07 : 0.02) * dt * 30);
+        // Бурун у ватерлинии: «яичный» ход ног держит игрока — чем выше он из воды и чем сильнее борьба, тем белее вода вокруг
+        const egg = Math.max(0, this.lift - 0.2);
+        this.world.foam(this.x, this.z, 0.55 + 0.2 * egg, (0.07 + 0.13 * egg + (W ? 0.12 : 0) + 0.04 * sp) * dt * 30);
+        if (egg > 0.35 && Math.random() < dt * 5 * egg) {
+          const a2 = Math.random() * Math.PI * 2, rr = 0.35 + Math.random() * 0.2;
+          this.world.splash(this.x + Math.cos(a2) * rr, 0.04, this.z + Math.sin(a2) * rr, 1 + (egg > 0.8 ? 1 : 0), 0.3 + 0.25 * egg);
+        }
       }
       if (W && Math.random() < dt * 2.5) this.world.splash(this.x, 0.08, this.z, 2, 0.6);
+      // Рука после гребка выходит из воды — с кисти срываются капли
+      if (K > 0.6 && sp > 1.0 && Math.random() < dt * 9) {
+        const side = Math.random() < 0.5 ? -0.25 : 0.25;
+        this.world.drip(this.x + c * 0.1 - sn * side, 0.45, this.z + sn * 0.1 + c * side, this.vx * 0.5, 0.4, this.vz * 0.5);
+      }
     }
   }
 
