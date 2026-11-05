@@ -703,10 +703,10 @@
       // Кроль с поднятой головой у элиты ~2,0 м/с, с мячом ~1,7 м/с, эггбитер боком ~0,9 м/с
       // Скорость решает заметно: 60 → ~1,7 м/с, 95 → ~2,05 м/с
       let v = 1.15 + 0.95 * this.attrs.spd / 100;
-      if (this.moveMode === 'sprint' && this.stamina > 0.12) v *= this.team.ai.phase === 'attack' && this.team.ai.phaseT < 4 && !this.hasBall ? 1.17 : 1.12;
+      if (this.moveMode === 'sprint' && this.stamina > 0.12) v *= (this.team.ai.phase === 'attack' && this.team.ai.phaseT < 4 && !this.hasBall) || (this.team.ai.phase === 'defense' && this.team.ai.phaseT < 5) ? 1.17 : 1.12; // рывок при переходе — у обеих команд
       if (this.moveMode === 'slow') v *= 0.5;
       if (this.hasBall) v *= this.holdMode === 'hold' ? 0.48 : 0.87;
-      if (this.isGK) v *= 0.72;
+      if (this.isGK) v *= this.rush ? 0.88 : 0.72; // выходя за мячом, вратарь плывёт в полную силу
       if (this.excluded) v *= 0.8;
       // Упёрся в заслон: почти стоит, пока не обойдёт заслоняющего
       if (this.screenT > 0) v *= 0.5;

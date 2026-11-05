@@ -99,6 +99,9 @@
         const m = new THREE.Mesh(WP.ringGeo(), new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.9, depthWrite: false }));
         m.renderOrder = 3; m.visible = false; world.scene.add(world.overlay(m)); this.rings[id] = m;
       }
+      // Круг 2 м вокруг взявшего мяч после фола: соперник в него не заходит, пока круг виден
+      this.guardMk = new THREE.Mesh(new THREE.RingGeometry(R.FOUL_DIST - 0.04, R.FOUL_DIST + 0.04, 64).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.6, depthWrite: false }));
+      this.guardMk.renderOrder = 3; this.guardMk.visible = false; world.scene.add(world.overlay(this.guardMk));
       this.teams.forEach((t, i) => world.setBench(i, t.capHex, t.bench.length));
       this.teams.forEach((t, i) => world.setFans && world.setFans(i, t.suitHex));
       this.combo = { p1: { stage: 0, t: 0 }, p2: { stage: 0, t: 0 } };
@@ -140,6 +143,7 @@
     dispose() {
       for (const t of this.teams) for (const p of t.players) if (p.rig) p.dispose();
       for (const k in this.rings) this.world.scene.remove(this.rings[k]);
+      this.world.scene.remove(this.guardMk);
       for (const k in this.markers) { this.world.scene.remove(this.markers[k].arrow); this.world.scene.remove(this.markers[k].ret); }
       for (const k in this.thruMk) {
         const tm = this.thruMk[k];
@@ -279,11 +283,71 @@
         else this.signal('free', { spot, dir: team.dir });
       }
       this.stoppageSubs(type, opts);
+      // После фола соперник отходит на 2 м и 3 с не атакует того, кто взял мяч
+      if (type === 'free' && !this.so) {
+        this.foulGuard = { team, player: this.restart.taker, until: this.t + R.FOUL_WAIT };
+        if (team.opp.human) this.emit('passinfo', { msg: 'Фол: отплыви на 2 м и жди 3 секунды — атаковать нельзя' });
+      }
       if (team.human) this.setControl(team.human, this.restart.taker);
       if (team.opp.human) {
         const d = this.nearestTo(team.opp, spot.x, spot.z, p => !p.isGK);
         if (d) this.setControl(team.opp.human, d);
       }
+    }
+
+    guarded(c) { return !!(this.foulGuard && this.foulGuard.player === c); }
+    // Круг 2 м после фола: ИИ сам отплывает и не заплывает внутрь, человека мягко выталкивает. Кончается через 3 с или когда
+    // игрок отдал мяч. Вокруг вратаря с мячом ИИ тоже не лезет: любая атака на него — удаление
+    updateFoulGuard(dt) {
+      const g = this.foulGuard, h = this.ball.holder, rs = this.restart;
+      const keepOut = (p, team, r0, pushHuman) => {
+        for (const d of team.players) {
+          if (!d.active || d.isGK || d.excluded) continue;
+          const dx = d.x - p.x, dz = d.z - p.z, dist = Math.hypot(dx, dz) || 0.01, nx = dx / dist, nz = dz / dist;
+          const human = this.isHumanActing(d) && d.input && d.input.active;
+          if (dist < r0) {
+            const v = human ? (pushHuman ? 1.5 : 0) : 0.9;
+            d.x += nx * v * dt; d.z += nz * v * dt;
+            // Круг — как стенка: скорость внутрь гасится, продавить стиком нельзя
+            const vn = d.vx * nx + d.vz * nz; if (vn < 0) { d.vx -= vn * nx; d.vz -= vn * nz; }
+            if (!human) { d.target = { x: p.x + nx * (r0 + 0.2), z: p.z + nz * (r0 + 0.2) }; d.moveMode = 'swim'; d.faceTo = p; }
+          } else if (!human && d.target) {
+            const tx = d.target.x - p.x, tz = d.target.z - p.z, td = Math.hypot(tx, tz) || 0.01;
+            if (td < r0 + 0.1) d.target = { x: p.x + tx / td * (r0 + 0.1), z: p.z + tz / td * (r0 + 0.1) };
+          }
+        }
+      };
+      if (h && h.isGK && !this.guarded(h)) keepOut(h, h.team.opp, 1.6, false);
+      if (!g) return;
+      if (rs && rs.team === g.team && rs.taker && g.player !== rs.taker) g.player = rs.taker;
+      const p = g.player;
+      if (this.t >= g.until || !p || !p.active || (this.state !== 'dead' && this.state !== 'live') || (this.state === 'live' && h !== p)) { this.foulGuard = null; return; }
+      keepOut(p, g.team.opp, R.FOUL_DIST, true);
+    }
+    // Отбор нельзя: у вратаря с мячом (удаление) или пока соперник обязан держать дистанцию после фола. true — попытку разобрали здесь
+    illegalTackle(def, c) {
+      if (!c || c.team === def.team) return false;
+      if (c.isGK && Math.hypot(c.x - def.x, c.z - def.z) < 1.5 && this.state === 'live') {
+        this.say(def.name + ' атакует вратаря — удаление.', 'red');
+        this.callExclusion(def, c, { x: c.x, z: c.z }, 'атака на вратаря');
+        return true;
+      }
+      if (this.guarded(c)) {
+        def.stealCD = 0.4;
+        if (def.ctrl) this.emit('passinfo', { msg: 'После фола ждём ' + Math.max(1, Math.ceil(this.foulGuard.until - this.t)) + ' с — атаковать нельзя' });
+        return true;
+      }
+      return false;
+    }
+
+    // Вне игры: только в зоне ворот, и мяч в этот момент ещё вне 2 метров
+    callOffside(a) {
+      const dteam = a.team.opp;
+      this.say('Нарушение правила 2 метров: ' + this.pname(a) + '.', 'info');
+      this.stopPlay('short');
+      this.shotClock = R.SHOT_CLOCK;
+      this.setRestart('free', dteam, { x: a.x, z: a.z }, dteam.gk && dteam.gk.active ? dteam.gk : null);
+      this.announce('ВНЕ ИГРЫ · 2 МЕТРА', '№' + a.num + ' ' + a.name + ' в зоне ворот впереди мяча', 'neutral');
     }
 
     // Замены — только в остановке игры. Заказанные человеком выходят в любой ближайшей остановке; автоматические — когда
@@ -437,10 +501,11 @@
       }
       const lead = 1.6 + 1.4 * to.attrs.spd / 100;
       let x = to.x + dx * lead;
-      // не ближе 2,3 м к линии ворот (правило 2 метров) и в пределах поля
-      const lim = dir * (R.HALF_L - 2.3);
+      // В зоне ворот — не ближе 2,3 м к линии (правило 2 метров), сбоку от конусов — хоть до самой линии; в пределах поля
+      o.z = clamp(to.z + dz * lead * 0.8, -R.HALF_W + 1, R.HALF_W - 1);
+      const lim = dir * (R.HALF_L - (Math.abs(o.z) > R.AREA_HALF_W + 0.3 ? 0.7 : 2.3));
       if ((x - lim) * dir > 0) x = lim;
-      o.x = x; o.z = clamp(to.z + dz * lead * 0.8, -R.HALF_W + 1, R.HALF_W - 1);
+      o.x = x;
       return o;
     }
     thruOk(p, t) { return !!t && t !== p && t.team === p.team && t.active && !t.isGK && !t.excluded && !t.rolling; }
@@ -558,7 +623,7 @@
       const vel = WP.solveThrow(from, aim, speed, high);
       this.ball.pos.copy(from);
       const kmh = Math.round(vel.length() * 3.6);
-      this.ball.release(vel, { type: 'pass', from: p, to, team: p.team, t: this.t, wet, power, kmh, lob, through, aim: { x: aim.x, z: aim.z } });
+      this.ball.release(vel, { type: 'pass', from: p, to, team: p.team, t: this.t, wet, power, kmh, lob, through, aim: { x: aim.x, z: aim.z }, fromL: AI.lineD(p.team, from.x) });
       this.ball.releaseT = this.t;
       // Пас: рука выбрасывается вперёд к партнёру, корпус разворачивается к нему (угол относительно взгляда)
       const toA = Math.atan2((spot ? spot.z : to.z) - p.z, (spot ? spot.x : to.x) - p.x);
@@ -791,6 +856,7 @@
     // Попытка отбора: исход зависит от положения защитника
     tryStealBy(def) {
       if (def.stealCD > 0 || def.excluded) return;
+      if (this.illegalTackle(def, this.ball.holder)) return;
       def.stealCD = 0.85;
       if (!def.action) def.action = { type: 'steal', t: 0, dur: 0.35 };
       const c = this.ball.holder;
@@ -807,7 +873,6 @@
       if (behind) pSteal *= 0.45;
       if (this.shielded(c, def)) pSteal *= 0.55;
       if (def.ctrl) pSteal *= 1.35;
-      if (c.isGK) pSteal *= 0.5;
       const r = Math.random();
       if (r < pSteal) {
         c.hasBall = false; this.ball.holder = null;
@@ -929,11 +994,12 @@
       def.stealCD = 1.1;
       def.action = { type: 'steal', t: 0, dur: 0.35 };
       const exposed = c.holdMode === 'hold' || (c.action && c.action.type === 'windup');
-      let p = dribbling ? (front ? 0.34 : 0.2) : exposed ? 0.28 : 0.16;
-      p += (def.attrs.def - c.attrs.pas) / 250 - (c.attrs.str - 80) / 500;
-      if (this.shielded(c, def)) p *= 0.5;
+      // Чистый вынос — редкая удача: промах оставляет защитника позади, а четверть промахов судья считает фолом
+      let p = dribbling ? (front ? 0.2 : 0.1) : exposed ? 0.12 : 0.08;
+      p += (def.attrs.def - c.attrs.pas) / 400 - (c.attrs.str - 80) / 600;
+      if (this.shielded(c, def)) p *= 0.4;
       p *= 0.6 + 0.9 * Math.pow(clamp((def.team.ai.aggr - 0.45) / 0.25, 0, 1.2), 1.5); // уровень ИИ: любитель слабее, мировой класс злее
-      p = clamp(p, 0.06, 0.7);
+      p = clamp(p, 0.04, 0.32);
       const hum = !!c.team.human;
       if (Math.random() < p) {
         c.action = null;
@@ -949,7 +1015,8 @@
         if (hum) this.announce('ЧИСТЫЙ ВЫНОС', def.name + ' забирает мяч у ' + c.name, 'red');
         this.say(def.name + ' чисто выбивает мяч у ' + c.name + '.', 'info');
       } else {
-        def.stunT = 0.45;
+        def.stunT = 0.7;
+        if (Math.random() < 0.25) { this.callFoul(c.team, { x: c.x, z: c.z }, c, 'ОБЫЧНЫЙ ФОЛ'); return; }
         if (hum && c.ctrl && Math.random() < 0.3) this.emit('passinfo', { msg: front && dribbling ? 'Защитник в лоб — обведи его или отдай пас' : 'Ушёл от отбора' });
       }
     }
@@ -958,6 +1025,7 @@
     // промах без фола; если соперник стоит с мячом или ты сзади — как раньше (рискованно, часто фол)
     humanStrip(def, id) {
       const c = this.ball.holder;
+      if (this.illegalTackle(def, c)) return;
       if (!c || c.team === def.team || def.stealCD > 0) { this.tryStealBy(def); return; }
       const dist = Math.hypot(c.x - def.x, c.z - def.z);
       if (dist > 1.3) { this.tryStealBy(def); return; }
@@ -968,12 +1036,12 @@
       const front = ((def.x - c.x) * mvx + (def.z - c.z) * mvz) / dist > 0.2;
       const dribbling = c.holdMode === 'dribble' || sp > 0.8;
       if (behind || !dribbling) { this.tryStealBy(def); return; }
-      def.stealCD = 0.8;
+      def.stealCD = 1.4;
       def.action = { type: 'steal', t: 0, dur: 0.35 };
-      // В жизни чисто забрать мяч у ведущего непросто: удаётся примерно каждый пятый раз спереди
-      let p = (front ? 0.22 : 0.12) + (def.attrs.def - c.attrs.pas) / 300 - (c.attrs.str - 80) / 500;
-      if (this.shielded(c, def)) p *= 0.5;
-      p = clamp(p, 0.05, 0.4);
+      // В жизни чисто забрать мяч у ведущего непросто: спереди удаётся примерно каждый седьмой раз; промах — риск фола
+      let p = (front ? 0.15 : 0.08) + (def.attrs.def - c.attrs.pas) / 400 - (c.attrs.str - 80) / 600;
+      if (this.shielded(c, def)) p *= 0.4;
+      p = clamp(p, 0.03, 0.26);
       if (Math.random() < p) {
         c.action = null;
         this.catchBall(def, 'steal');
@@ -981,15 +1049,17 @@
         this.announce('ЧИСТЫЙ ВЫНОС', def.name + ' забирает мяч у ' + c.name + ' без фола', 'goal');
         WP.Audio.crowd('cheer');
       } else {
-        def.stunT = 0.4;
+        def.stunT = 0.6;
+        if (Math.random() < 0.25) { this.callFoul(c.team, { x: c.x, z: c.z }, c, 'ОБЫЧНЫЙ ФОЛ'); return; }
         this.emit('passinfo', { msg: front ? 'Не дотянулся — соперник убрал мяч' : 'Сбоку сложнее — встань у него на пути' });
       }
     }
 
     cleanStrip(def, id) {
       const c = this.ball.holder;
+      if (this.illegalTackle(def, c)) { this.emit('combo', { id, stage: 0 }); return; }
       def.action = { type: 'steal', t: 0, dur: 0.35 };
-      const fail = (msg) => { def.stunT = 0.5; this.emit('combo', { id, stage: 0, fail: true, msg }); };
+      const fail = (msg) => { def.stunT = 0.8; this.emit('combo', { id, stage: 0, fail: true, msg }); };
       if (!c || c.team === def.team || this.state !== 'live') return fail('Мяча рядом нет');
       const dist = Math.hypot(c.x - def.x, c.z - def.z);
       if (dist > 1.45) return fail('Далеко: подплыви ближе');
@@ -997,10 +1067,12 @@
       const behind = ((def.x - c.x) * gvx + (def.z - c.z) * gvz) / (gl * dist) < -0.3;
       if (behind) { this.emit('combo', { id, stage: 0, fail: true, msg: 'Сзади чисто не сыграть' }); def.stealCD = 0; this.tryStealBy(def); return; }
       const exposed = c.holdMode === 'hold' || (c.action && c.action.type === 'windup');
-      let pS = (exposed ? 0.55 : 0.25) + (def.attrs.def - c.attrs.pas) / 250;
-      if (c.action && c.action.type === 'windup') pS += 0.06;
-      if (this.shielded(c, def)) pS -= 0.25;
-      pS = clamp(pS, 0.1, 0.7);
+      // Комбо сложнее одиночного нажатия, но не гарантия: примерно каждый четвёртый раз, а сорвалось — треть раз фол
+      let pS = (exposed ? 0.28 : 0.14) + (def.attrs.def - c.attrs.pas) / 400;
+      if (c.action && c.action.type === 'windup') pS += 0.03;
+      if (this.shielded(c, def)) pS -= 0.12;
+      pS = clamp(pS, 0.05, 0.36);
+      def.stealCD = 1.6;
       if (Math.random() < pS) {
         c.action = null;
         this.catchBall(def, 'steal');
@@ -1009,13 +1081,18 @@
         this.say(def.name + ' чисто выбивает мяч у ' + c.name + ' — фола нет.', 'save');
         WP.Audio.crowd('cheer');
         this.emit('combo', { id, stage: 3, ok: true });
-      } else fail(this.shielded(c, def) ? 'Соперник закрыл мяч корпусом' : 'Соперник убрал мяч');
+      } else {
+        fail(this.shielded(c, def) ? 'Соперник закрыл мяч корпусом' : 'Соперник убрал мяч');
+        if (Math.random() < 0.33) this.callFoul(c.team, { x: c.x, z: c.z }, c, 'ОБЫЧНЫЙ ФОЛ');
+      }
     }
 
     catchBall(p, how) {
       const b = this.ball, f = b.flight;
       if (f && f.type === 'shot' && p.isGK && p.team !== f.team && f.onTarget && !f.saveCounted && !this.so) this.countSave(p, f);
       if (f && f.type === 'pass' && f.team === p.team && f.from !== p) { p.lastPassFrom = f.from; p.lastPassT = this.t; }
+      // Пас в зону ворот с мячом вне 2 метров — сразу вне игры, переход мяча
+      if (f && f.type === 'pass' && f.team === p.team && !p.isGK && this.state === 'live' && f.fromL >= R.LINE_2 && AI.lineD(p.team, p.x) < R.LINE_2 - 0.05 && Math.abs(p.z) < R.AREA_HALF_W) { this.callOffside(p); return; }
       p.gainT = this.t; p.gainHow = how; p.xpTry = undefined;
       // Выход вратаря: забрал — молодец; вышел далеко, а мяч взял соперник — ошибка, ворота пустые
       const og = p.team.opp.gk;
@@ -1400,6 +1477,7 @@
         if (gk && gk.active) { AI.gkUpdate(this, gk, dt); AI.gkSaveStep(this, gk, dt); }
       }
       for (const p of this.all()) this.updateAction(p, dt);
+      this.updateFoulGuard(dt);
       this.contactHold();
       if (this.state !== 'sprint' && this.state !== 'intro') for (const p of this.all()) p.move(dt, this.boundsFor(p));
       this.separate();
@@ -1436,7 +1514,7 @@
         for (const d of t.players) {
           if (!d.active || d.isGK || d.excluded || d.hasBall) continue;
           let a = null, best = 0.95;
-          for (const q of t.opp.players) { if (!q.active || q.isGK) continue; const dist = Math.hypot(q.x - d.x, q.z - d.z); if (dist < best) { best = dist; a = q; } }
+          for (const q of t.opp.players) { if (!q.active || q.isGK || this.guarded(q)) continue; const dist = Math.hypot(q.x - d.x, q.z - d.z); if (dist < best) { best = dist; a = q; } }
           if (!a || Math.abs(a.x - gx) - Math.abs(d.x - gx) < -0.3) continue;
           const k = Math.min(1, (0.45 + 0.55 * tight) * (1 - best / 0.95) * 1.6);
           if (k > (a.heldT > 0 ? a.held : 0)) a.held = k;
@@ -1836,7 +1914,7 @@
       const c = ball.holder;
       const pt = this.possession;
       // 1. Отборы и фолы защитников ИИ против игрока с мячом
-      if (c && !c.isGK) {
+      if (c && !c.isGK && !this.guarded(c)) {
         for (const d of c.team.opp.players) {
           if (!d.active || d.isGK || this.isHumanActing(d)) continue;
           const dist = Math.hypot(d.x - c.x, d.z - c.z);
@@ -1855,7 +1933,7 @@
             const into = dribbling && front && sp > 0.7;
             // Против ведущего-человека в полную силу; ИИ-атакующие и так не лезут напролом — им редко
             const vsHuman = !!(c.ctrl && c.team.human);
-            const lv = d.team.ai.aggr / 0.6, rateS = (into ? 1.0 : dribbling ? 0.12 : exposed ? 0.08 : 0.04) * lv * lv * (d.team.ai.pressing ? 1.3 : 1) * (vsHuman ? 1 : 0.12);
+            const lv = d.team.ai.aggr / 0.6, rateS = (into ? 0.3 : dribbling ? 0.06 : exposed ? 0.04 : 0.02) * lv * lv * (d.team.ai.pressing ? 1.3 : 1) * (vsHuman ? 1 : 0.12);
             if (Math.random() < 1 - Math.exp(-rateS * dt)) { this.aiStrip(d, c, front, dribbling); if (this.state !== 'live' || this.ball.holder !== c) return; continue; }
           }
           if (dist > 1.0) continue;
@@ -1903,17 +1981,9 @@
         for (const a of pt.players) {
           if (!a.active || a.hasBall || a.isGK) { a.offT = 0; continue; }
           const l = AI.lineD(pt, a.x);
-          if (l < R.LINE_2 && l < bl - 0.15) a.offT = (a.offT || 0) + dt; else a.offT = 0;
-          if (a.offT > 0.45) {
-            a.offT = 0;
-            const dteam = pt.opp;
-            this.say('Нарушение правила 2 метров: ' + this.pname(a) + '.', 'info');
-            this.stopPlay('short');
-            this.shotClock = R.SHOT_CLOCK;
-            this.setRestart('free', dteam, { x: a.x, z: a.z }, dteam.gk && dteam.gk.active ? dteam.gk : null);
-            this.announce('ВНЕ ИГРЫ · 2 МЕТРА', '№' + a.num + ' ' + a.name + ' впереди мяча в 2-метровой зоне', 'neutral');
-            return;
-          }
+          // Сбоку от конусов можно хоть до линии ворот; в зоне ворот нельзя, пока мяч ещё вне 2 метров
+          if (l < R.LINE_2 && Math.abs(a.z) < R.AREA_HALF_W && bl >= R.LINE_2) a.offT = (a.offT || 0) + dt; else a.offT = 0;
+          if (a.offT > 0.9) { a.offT = 0; this.callOffside(a); return; } // секунда, чтобы выйти из зоны, когда мяч ушёл наружу
         }
       }
     }
@@ -2140,6 +2210,9 @@
       if (dt > 0) this.computeWrestle();
       for (const p of this.all()) if (p.rig) p.animate(dt, this.t, ball);
       ball.render(dt);
+      const fg = this.foulGuard, fp = fg && fg.player;
+      this.guardMk.visible = !!(fp && fp.rig);
+      if (this.guardMk.visible) { this.guardMk.position.set(fp.x, 0.05 + this.world.waveHeight(fp.x, fp.z), fp.z); this.guardMk.material.opacity = 0.65 * Math.min(1, (fg.until - this.t) / 0.5); }
       for (const id of ['p1', 'p2']) {
         const p = this.controlled[id], ring = this.rings[id];
         if (p && p.rig && p.active && this.state !== 'final') { ring.visible = true; ring.position.set(p.x, 0.05 + this.world.waveHeight(p.x, p.z), p.z); ring.scale.setScalar(1 + 0.06 * Math.sin(this.t * 6)); }

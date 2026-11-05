@@ -541,6 +541,7 @@ WP.Net = (function () {
       to: [m.teams[0].timeouts, m.teams[1].timeouts], p: P,
       ia: game.ia || 0, s2: m.controlled.p2 ? r2(m.controlled.p2.stamina) : 1,
     };
+    if (m.foulGuard && m.foulGuard.player) s.fg = [m.teams.indexOf(m.foulGuard.team), m.foulGuard.player.num, r2(m.foulGuard.until - m.t)];
     if (game.bn) s.bn = game.bn;
     if (game.cd) s.cd = game.cd;
     if (m.so) s.sos = m.soScore();
@@ -878,6 +879,7 @@ WP.Net = (function () {
     const st = STATES[sb.st] || 'live';
     m.t = sb.t; m.clock = sb.cl; m.shotClock = sb.sc; m.period = sb.pe;
     m.possession = sb.po >= 0 ? m.teams[sb.po] : null;
+    { const fp = sb.fg && m.teams[sb.fg[0]].players.find(q => q.num === sb.fg[1]); m.foulGuard = fp ? { team: m.teams[sb.fg[0]], player: fp, until: sb.t + sb.fg[2] } : null; }
     if (sb.to) { m.teams[0].timeouts = sb.to[0]; m.teams[1].timeouts = sb.to[1]; }
     if (sb.sos) { m.so = m.so || { net: true }; m.soScore = () => sb.sos; } else m.so = null;
     const mine = m.teams[1].players.find(q => q.num === sb.c2), theirs = m.teams[0].players.find(q => q.num === sb.c1);

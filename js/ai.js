@@ -9,7 +9,8 @@
   const rnd = (a, b) => a + Math.random() * (b - a);
 
   // Позиции (dx — расстояние от линии ворот, r — вправо от атакующего)
-  const F33 = [[2.4, 3.9], [5.1, 3.2], [6.9, 0], [5.1, -3.2], [2.4, -3.9], [2.35, 0]];
+  // Крайние стоят глубже 2 м, но сбоку от конусов зоны ворот (правило разрешает)
+  const F33 = [[1.7, 4.3], [5.1, 3.2], [6.9, 0], [5.1, -3.2], [1.7, -4.3], [2.35, 0]];
   const F42 = [[2.3, 1.75], [2.3, -1.75], [5.2, 4.2], [5.6, 1.45], [5.6, -1.45], [5.2, -4.2]];
   // «Зонтик» (дуга): полевые по дуге на 5–7 м, центровой — ручка зонтика; больше места для проходов и заслонов
   const FARC = [[3.1, 4.7], [5.7, 3.0], [7.0, 0], [5.7, -3.0], [3.1, -4.7], [2.3, 0.5]];
@@ -24,7 +25,7 @@
   };
   // Зона 6 на 6: двое прикрывают центрового, четверо — «коридоры» на 4–5 м
   const Z6 = [[1.6, 1.3], [1.6, -1.3], [3.7, 3.4], [3.7, -3.4], [4.8, 1.3], [4.8, -1.3]];
-  const F5 = [[2.5, 3.7], [5.4, 2.3], [5.4, -2.3], [2.5, -3.7], [2.35, 0]];
+  const F5 = [[1.8, 4.2], [5.4, 2.3], [5.4, -2.3], [1.8, -4.2], [2.35, 0]];
   const F5PP = [[2.3, 1.8], [2.3, -1.8], [5.3, 3.6], [5.8, 0], [5.3, -3.6]];
   const F4 = [[3.0, 3.3], [5.6, 1.4], [5.6, -1.4], [3.0, -3.3]];
   const Z5 = [[1.7, 1.45], [1.7, -1.45], [3.9, 2.8], [3.9, -2.8], [5.6, 0]];
@@ -98,6 +99,8 @@
     const dx = to.x - from.x, dz = to.z - from.z, d = Math.hypot(dx, dz);
     if (d < 1.4) return -9;
     if (to.isGK && AI.ownLineD(team, from.x) > 11) return -9;
+    // Партнёр в зоне ворот, а мяч ещё вне 2 метров: такой пас — вне игры
+    if (AI.lineD(team, from.x) >= R.LINE_2 && AI.lineD(team, to.x) < R.LINE_2 + 0.1 && Math.abs(to.z) < R.AREA_HALF_W) return -9;
     let risk = 0;
     for (const o of opp.players) {
       if (!o.active) continue;
@@ -150,7 +153,7 @@
       if (!(phase === 'loose' || (ai.phase === 'loose' && phase === ai.lastSolid))) {
         ai.phaseT = 0;
         // Потерявшие мяч не сразу разворачиваются назад (~0,4 с) — у атакующих появляется шанс на отрыв
-        if (phase === 'defense' && match.state === 'live') ai.turnT = 0.3 + 0.2 * (1 - team.ai.aggr);
+        if (phase === 'defense' && match.state === 'live') ai.turnT = 0.1 + 0.15 * (1 - team.ai.aggr); // читают потерю: почти сразу разворачиваются
         // Переход в защиту: сначала все отплывают «бункером» к своим воротам, потом разбирают соперников
         if (phase === 'defense') { ai.bunker = true; ai.bunkerT = 0; }
       }
@@ -192,9 +195,9 @@
   // Без скучивания. В долгом заплыве (больше 4 м до точки по длине) каждый плывёт своим коридором: команда сразу
   // растягивается на ширину бассейна, а у цели коридоры сходятся к точкам расстановки. Если push — точки ближе 1,7 м
   // друг к другу (и к неподвижным игрокам fixed) раздвигаются, чтобы двое не стояли в одном месте.
-  AI.spreadLanes = function (list, fixed, push, carrier) {
+  AI.spreadLanes = function (list, fixed, push, carrier, width) {
     if (!list.length) return;
-    const W = R.HALF_W - 2.2;
+    const W = width || R.HALF_W - 2.2;
     // Коридоры по нынешнему положению поперёк бассейна (пути не пересекаются); игрок с мячом занимает свой
     const ord = list.concat(carrier && !list.includes(carrier) ? [carrier] : []).sort((a, b) => a.z - b.z);
     const n = ord.length;
@@ -224,6 +227,9 @@
       }
     }
   };
+
+  // Насколько близко к линии ворот можно стоять без мяча: сбоку от конусов — почти до линии, в зоне ворот — не глубже мяча
+  AI.minLine = (z, bl) => Math.abs(z) > R.AREA_HALF_W + 0.25 ? 0.5 : Math.min(2.2, Math.max(0.3, bl - 0.25));
 
   AI.attackTargets = function (match, team, field) {
     const ai = team.ai, ball = match.ball;
@@ -288,11 +294,15 @@
           tx = g.x; tz = g.z;
         } else if (p.driveT <= -2.2) p.driveT = rnd(4, 9);
       }
-      // Правило 2 метров: не заплывать за мяч в 2-метровую зону
-      const minL = Math.min(2.2, Math.max(0.3, bl - 0.25));
+      // Мяч уже внутри 2 метров: центровой заходит в зону ворот за ним — вне игры не будет
+      if (p.slotName === 'hole' && bl < R.LINE_2 && car && car !== p && !rs) tx = team.dir * (R.HALF_L - Math.max(0.9, bl));
+      // Правило 2 метров: в зоне ворот не заплывать за мяч, сбоку от конусов — можно до линии ворот
+      const minL = AI.minLine(tz, bl);
       if (AI.lineD(team, tx) < minL) tx = team.dir * (R.HALF_L - minL);
-      if (AI.lineD(team, tx) < 2.12 && bl > AI.lineD(team, tx)) tx = team.dir * (R.HALF_L - 2.2);
+      if (Math.abs(tz) < R.AREA_HALF_W + 0.25 && AI.lineD(team, tx) < 2.12 && bl >= R.LINE_2) tx = team.dir * (R.HALF_L - 2.2);
       p.target = { x: tx, z: tz };
+      // Свой бросок улетел — кроме центрового все сразу смещаются назад: при отскоке к сопернику контратаку встретят
+      if (ball.flight && ball.flight.type === 'shot' && ball.flight.team === team && p.slotName !== 'hole' && !rs) { p.target = { x: tx - team.dir * 3.2, z: tz }; p.moveMode = 'sprint'; p.faceTo = ball.pos; p.liftTarget = 0.05; continue; }
       if (!(play && play.target.has(p))) spread.push(p);
       const far = Math.hypot(tx - p.x, tz - p.z);
       const inPlay = play && (play.type === 'drive' ? play.target.has(p) && far > 0.8 : (p === play.driver && play.phase === 'drive') || (p === play.screener && play.phase === 'set'));
@@ -303,8 +313,7 @@
       const fixed = field.filter(p => !spread.includes(p)).map(p => p.target && !p.hasBall ? p.target : { x: p.x, z: p.z });
       AI.spreadLanes(spread, fixed, true, car);
       // Правило 2 метров после раздвижки: не глубже допустимого
-      const minL = Math.min(2.2, Math.max(0.3, bl - 0.25));
-      for (const p of spread) if (AI.lineD(team, p.target.x) < minL) p.target.x = team.dir * (R.HALF_L - minL);
+      for (const p of spread) { const minL = AI.minLine(p.target.z, bl); if (AI.lineD(team, p.target.x) < minL) p.target.x = team.dir * (R.HALF_L - minL); }
     }
   };
 
@@ -629,15 +638,21 @@
     // Подхват: соперник глубже 8 м — его берёт ближайший защитник со стороны ворот (если такой рядом),
     // игрока с мячом у ворот — всегда кто-то, пусть и вдогонку
     const taken = new Map(), freeD = new Set(field.filter(d => !(d.ctrl && d.input.active)));
-    const deep = attackers.filter(a => gd(a) < 8).sort((a, b) => gd(a) - gd(b));
+    // Закрываем контратаку: сначала самые опасные — кто ближе к воротам или уже плывёт к ним; каждого берёт тот, кто раньше
+    // успеет на его путь к воротам (точка перехвата впереди нападающего), а не просто ближайший
+    const dirG = -team.dir, runs = (a) => a.vx * dirG > 0.5;
+    const deep = attackers.filter(a => gd(a) < 8 || a === carrier || (runs(a) && gd(a) < 14)).sort((a, b) => gd(a) - gd(b));
+    const speedOf = (p) => (1.15 + 0.95 * p.attrs.spd / 100) * 1.15;
     for (const a of deep) {
+      const g0 = gd(a), lead = Math.min(3, g0 * 0.45), ux = (-team.dir * R.HALF_L - a.x) / (g0 || 1), uz = -a.z / (g0 || 1);
+      const ix = a.x + ux * lead, iz = a.z + uz * lead, tA = lead / speedOf(a);
       let best = null, bc = 1e9;
       for (const d of freeD) {
-        const c = Math.hypot(d.x - a.x, d.z - a.z) + (gd(d) < gd(a) + 0.6 ? 0 : 3);
+        const c = Math.hypot(d.x - ix, d.z - iz) / speedOf(d) - tA + (gd(d) < g0 + 0.6 ? 0 : 0.8);
         if (c < bc) { bc = c; best = d; }
       }
       if (!best) break;
-      if (bc < 4.5 || (a === carrier && cGD < 7.5)) { taken.set(best, a); freeD.delete(best); }
+      if (bc < 2.4 || (a === carrier && cGD < 7.5)) { taken.set(best, a); freeD.delete(best); }
     }
     const gx = -team.dir * R.HALF_L;
     for (const d of field) {
@@ -646,7 +661,9 @@
       let tx, tz;
       if (a) {
         const vx = gx - a.x, vz = -a.z, L = Math.hypot(vx, vz) || 1, dd = a === carrier ? 0.78 : 0.6;
-        tx = a.x + vx / L * dd + a.vx * 0.4; tz = a.z + vz / L * dd + a.vz * 0.4;
+        // Отстаёт — плывёт на упреждение, а не в спину
+        const far = Math.min(1.1, Math.hypot(d.x - a.x, d.z - a.z) / 2.5);
+        tx = a.x + vx / L * dd + a.vx * Math.max(0.4, far); tz = a.z + vz / L * dd + a.vz * Math.max(0.4, far);
         d.faceTo = a === carrier ? a : ball.pos; d.liftTarget = a === carrier ? 0.35 : 0.15;
         if (a === carrier) {
           const shooting = carrier.action && carrier.action.type === 'windup';
@@ -663,7 +680,7 @@
       d.target = { x: tx, z: tz }; d.mark = a || null;
       d.moveMode = Math.hypot(tx - d.x, tz - d.z) > 2 ? 'sprint' : 'swim';
     }
-    AI.spreadLanes(field.filter(d => !taken.has(d) && !(d.ctrl && d.input.active) && !(d.screenT > 0)), [], false);
+    AI.spreadLanes(field.filter(d => !taken.has(d) && !(d.ctrl && d.input.active) && !(d.screenT > 0)), [], false, null, 4.6); // назад — уже, чем в атаку: центр не оголять
     return true;
   };
 
@@ -885,7 +902,7 @@
     if (gk.readT > 0) return gk.rush;
     gk.readT = 0.1;
     const path = AI.ballPath(ball, 2.2, 0.1);
-    const vG = (1.15 + 0.95 * gk.attrs.spd / 100) * 1.12 * 0.72;
+    const vG = (1.15 + 0.95 * gk.attrs.spd / 100) * 1.12 * 0.88;
     const reactG = gk.rush ? 0 : 0.3 - 0.15 * a / 100;
     let gBest = 1e9, gPt = null;
     for (const s of path) {
@@ -908,9 +925,11 @@
       }
       if (p.team === team) dBest = Math.min(dBest, best); else oBest = Math.min(oBest, best);
     }
-    // Мяч у самых ворот и рядом никого — забрать в любом случае
-    const easy = AI.ownLineD(team, gPt.x) < 2.5 && oBest > gBest + 0.6;
-    if (!easy && dBest + 0.15 < gBest && dBest < oBest) { gk.rush = null; return null; }
+    // Ничейный мяч лежит в его зоне — вратарь не ждёт, пока приплывёт соперник: идёт и забирает, даже если гонка почти равная.
+    // Стоит на месте только если нападающий явно раньше или свой защитник уже рядом
+    const Lp = AI.ownLineD(team, gPt.x), slow = ball.vel.length() < 2.5 && ball.pos.y < 0.4;
+    const easy = (Lp < 2.5 && oBest > gBest + 0.6) || (slow && Lp <= 5.5 && Math.abs(gPt.z) <= 4.5 && gBest < oBest + 0.2);
+    if (dBest + (easy ? 0.5 : 0.15) < gBest && dBest < oBest) { gk.rush = null; return null; }
     const seen = oBest * (1 + gk.readErr);
     const margin = gk.rush ? -0.35 : 0.12 - 0.1 * (a - 80) / 20;
     if (easy || gBest + margin < seen) {

@@ -87,6 +87,8 @@
         float lc = 1.0 - smoothstep(hwl - fwx, hwl + fwx, ax);
         tile = mix(tile, vec3(0.95, 0.97, 1.0), max(lg, lc) * onField);
         tile = mix(tile, vec3(0.86, 0.12, 0.13), l2 * onField);
+        // Зона ворот: боковые линии от 2 м до линии ворот, напротив конусов
+        if (uMode == 0) { float fwz = fwidth(vW.z) * 0.8 + 0.001; float la = (1.0 - smoothstep(hwl - fwz, hwl + fwz, abs(abs(vW.z) - 3.5))) * step(10.5, ax) * step(ax, 12.5); tile = mix(tile, vec3(0.86, 0.12, 0.13), la); }
         tile = mix(tile, vec3(0.98, 0.80, 0.05), l5 * onField);
         tile = mix(tile, vec3(0.13, 0.66, 0.30), l6 * onField);
       }
@@ -433,7 +435,22 @@
       this.ripIdx = (this.ripIdx + 1) % this.ripples.length;
     }
 
+    // Зона ворот: красные конусы на 2 м и буйки на линии ворот, в 2 м от штанг. Сбоку от них можно заходить хоть до линии ворот,
+    // а между ними действует правило 2 метров
+    buildGoalArea() {
+      const red = WP.underwaterify(new THREE.MeshStandardMaterial({ color: 0xd8232a, roughness: 0.45 }), 0.6);
+      const cones = new THREE.InstancedMesh(new THREE.ConeGeometry(0.13, 0.36, 16), red, 4), buoys = new THREE.InstancedMesh(new THREE.SphereGeometry(0.11, 14, 10), red, 4);
+      const m = new THREE.Matrix4();
+      let i = 0;
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+        m.makeTranslation(sx * (R.HALF_L - R.LINE_2), 0.14, sz * R.AREA_HALF_W); cones.setMatrixAt(i, m);
+        m.makeTranslation(sx * R.HALF_L, 0.05, sz * R.AREA_HALF_W); buoys.setMatrixAt(i, m); i++;
+      }
+      this.scene.add(cones, buoys);
+    }
+
     buildLines() {
+      this.buildGoalArea();
       const s = this.scene;
       // Плавучие разделительные дорожки-«волногасители»: диски с рёбрами на тросе, как на соревнованиях. По бокам поля
       // цвет по зонам — красный до 2 м, жёлтый до 5 м, зелёный до 6 м, белый в середине; за воротами — поперечные
