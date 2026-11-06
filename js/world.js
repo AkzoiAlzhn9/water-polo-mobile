@@ -435,18 +435,15 @@
       this.ripIdx = (this.ripIdx + 1) % this.ripples.length;
     }
 
-    // Зона ворот: красные конусы на 2 м и буйки на линии ворот, в 2 м от штанг. Сбоку от них можно заходить хоть до линии ворот,
-    // а между ними действует правило 2 метров
+    // Зона ворот: красные конусы прямо на линии ворот, сбоку от ворот — в 2 м от штанг. Сбоку от них можно заходить хоть до линии
+    // ворот, а между ними (до 2 м) действует правило 2 метров
     buildGoalArea() {
       const red = WP.underwaterify(new THREE.MeshStandardMaterial({ color: 0xd8232a, roughness: 0.45 }), 0.6);
-      const cones = new THREE.InstancedMesh(new THREE.ConeGeometry(0.13, 0.36, 16), red, 4), buoys = new THREE.InstancedMesh(new THREE.SphereGeometry(0.11, 14, 10), red, 4);
+      const cones = new THREE.InstancedMesh(new THREE.ConeGeometry(0.13, 0.36, 16), red, 4);
       const m = new THREE.Matrix4();
       let i = 0;
-      for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
-        m.makeTranslation(sx * (R.HALF_L - R.LINE_2), 0.14, sz * R.AREA_HALF_W); cones.setMatrixAt(i, m);
-        m.makeTranslation(sx * R.HALF_L, 0.05, sz * R.AREA_HALF_W); buoys.setMatrixAt(i, m); i++;
-      }
-      this.scene.add(cones, buoys);
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) { m.makeTranslation(sx * R.HALF_L, 0.14, sz * R.AREA_HALF_W); cones.setMatrixAt(i++, m); }
+      this.scene.add(cones);
     }
 
     buildLines() {
